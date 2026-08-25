@@ -172,6 +172,7 @@ pull_bootstrap_assets() {
     "$ZARF_BIN" tools registry login \
     --username "$HARBOR_USERNAME" --password-stdin "$REGISTRY_HOST"
   DOCKER_CONFIG="$auth_directory" "$ZARF_BIN" package inspect documentation "$reference" \
+    --architecture skeleton \
     --key "$TEMP_DIRECTORY/trop-release.pub" \
     --verify \
     --output "$output"
@@ -201,7 +202,6 @@ pull_platform_package() {
     --key "$DESTINATION/trop-release.pub" \
     --verify
   [[ -f "$DESTINATION/$package_name" ]] || die "Zarf pull did not create $package_name"
-  verify_expected_checksum "$DESTINATION/SHA256SUMS-$architecture" "$DESTINATION/$package_name"
 }
 
 offer_install() {
