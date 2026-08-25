@@ -52,16 +52,9 @@ trop1.<base64url(harbor-robot-username)>.<base64url(harbor-robot-secret)>
 ```
 
 Base64url is transport encoding, not encryption. The token has the same security
-impact as the Harbor robot credential inside it. Operators can create the encoded
-value without exposing the secret in process arguments:
-
-```bash
-printf '%s\n' "$HARBOR_ROBOT_SECRET" | \
-  ./tools/create-token.sh 'robot$trop-releases+device-name' --secret-stdin
-```
-
-Use one pull-only Harbor robot per user or device, set an expiry, inventory its
-owner and issue key, and disable or delete it to revoke access.
+impact as the Harbor robot credential inside it. Tokens are generated only by
+the private operator workflow. Use one pull-only Harbor robot per user or device
+and disable or delete it to revoke access.
 
 ## Trust boundary
 
@@ -81,7 +74,7 @@ oci://registry.trop.defencebay.com/trop-releases/<architecture>/trop-platform:<r
 ## Development
 
 ```bash
-shellcheck trop-bootstrap.sh tools/create-token.sh tests/test-bootstrap.sh
+shellcheck trop-bootstrap.sh tests/test-bootstrap.sh
 ./tests/test-bootstrap.sh
 ```
 

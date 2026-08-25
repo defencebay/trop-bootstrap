@@ -16,7 +16,7 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends shellcheck
       - name: ShellCheck
-        run: shellcheck trop-bootstrap.sh tools/create-token.sh tests/test-bootstrap.sh
+        run: shellcheck trop-bootstrap.sh tests/test-bootstrap.sh
       - name: Smoke test
         run: ./tests/test-bootstrap.sh
       - name: Reject obvious secret material
