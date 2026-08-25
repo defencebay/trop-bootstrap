@@ -3,6 +3,8 @@
 set -euo pipefail
 
 readonly TROP_BOOTSTRAP_VERSION="0.1.0"
+# Bootstrap protocol v1 always uses this pinned client. The signed private
+# package carries the release-specific Zarf runtime used for platform pulls.
 readonly ZARF_VERSION="v0.70.1"
 readonly REGISTRY_HOST="registry.trop.defencebay.com"
 readonly HARBOR_PROJECT="trop-releases"
@@ -12,6 +14,8 @@ DESTINATION=""
 TOKEN_STDIN="false"
 FETCH_ONLY="false"
 TEMP_DIRECTORY=""
+STAGING_PARENT=""
+STAGING_DIRECTORY=""
 HARBOR_USERNAME=""
 HARBOR_SECRET=""
 ZARF_BIN=""
@@ -29,6 +33,9 @@ cleanup() {
   HARBOR_SECRET=""
   if [[ -n "$TEMP_DIRECTORY" && -d "$TEMP_DIRECTORY" ]]; then
     rm -rf -- "$TEMP_DIRECTORY"
+  fi
+  if [[ -n "$STAGING_PARENT" && -d "$STAGING_PARENT" ]]; then
+    rm -rf -- "$STAGING_PARENT"
   fi
 }
 trap cleanup EXIT
@@ -158,8 +165,17 @@ verify_bootstrap_assets() {
   chmod +x "$directory/trop-install.sh" "${zarf_files[0]}"
 }
 
+prepare_staging() {
+  local destination_parent
+  destination_parent="$(dirname "$DESTINATION")"
+  mkdir -p "$destination_parent"
+  STAGING_PARENT="$(mktemp -d "$destination_parent/.trop-${RELEASE}.partial.XXXXXX")"
+  STAGING_DIRECTORY="$STAGING_PARENT/payload"
+}
+
 pull_bootstrap_assets() {
-  local architecture="$1" output staging reference auth_directory zarf_filename
+  local architecture="$1" destination="$2" output staging reference auth_directory zarf_filename
+  local release_zarf_files
   output="$TEMP_DIRECTORY/extracted"
   staging="$output/trop-bootstrap-documentation"
   reference="oci://${REGISTRY_HOST}/${HARBOR_PROJECT}/${architecture}/trop-bootstrap:${RELEASE}"
@@ -177,16 +193,21 @@ pull_bootstrap_assets() {
     --verify \
     --output "$output"
   [[ -d "$staging" ]] || die "Zarf did not extract the private installer assets"
-  cp "$ZARF_BIN" "$staging/$zarf_filename"
+  shopt -s nullglob
+  release_zarf_files=("$staging"/zarf_*_Linux_"$architecture")
+  shopt -u nullglob
+  [[ ${#release_zarf_files[@]} -le 1 ]] || die "bootstrap package contains multiple Zarf runtimes"
+  if [[ ${#release_zarf_files[@]} -eq 0 ]]; then
+    cp "$ZARF_BIN" "$staging/$zarf_filename"
+  fi
   verify_bootstrap_assets "$staging" "$architecture"
-  mkdir -p "$(dirname "$DESTINATION")"
-  mv "$staging" "$DESTINATION"
-  info "Verified installer assets at $DESTINATION"
+  mv "$staging" "$destination"
+  info "Verified private installer assets"
 }
 
 pull_platform_package() {
-  local architecture="$1" zarf_binary package_name package_ref auth_directory
-  zarf_binary="$(find "$DESTINATION" -maxdepth 1 -type f -name "zarf_*_Linux_$architecture" -print -quit)"
+  local architecture="$1" destination="$2" zarf_binary package_name package_ref auth_directory
+  zarf_binary="$(find "$destination" -maxdepth 1 -type f -name "zarf_*_Linux_$architecture" -print -quit)"
   package_name="zarf-package-trop-platform-${architecture}-${RELEASE}.tar.zst"
   package_ref="oci://${REGISTRY_HOST}/${HARBOR_PROJECT}/${architecture}/trop-platform:${RELEASE}"
   auth_directory="$TEMP_DIRECTORY/zarf-auth"
@@ -198,10 +219,19 @@ pull_platform_package() {
     --username "$HARBOR_USERNAME" --password-stdin "$REGISTRY_HOST"
   DOCKER_CONFIG="$auth_directory" "$zarf_binary" package pull "$package_ref" \
     --architecture "$architecture" \
-    --output-directory "$DESTINATION" \
-    --key "$DESTINATION/trop-release.pub" \
+    --output-directory "$destination" \
+    --key "$destination/trop-release.pub" \
     --verify
-  [[ -f "$DESTINATION/$package_name" ]] || die "Zarf pull did not create $package_name"
+  [[ -f "$destination/$package_name" ]] || die "Zarf pull did not create $package_name"
+}
+
+publish_destination() {
+  [[ ! -e "$DESTINATION" ]] || die "destination appeared while downloading: $DESTINATION"
+  mv -T -- "$STAGING_DIRECTORY" "$DESTINATION"
+  rmdir "$STAGING_PARENT"
+  STAGING_PARENT=""
+  STAGING_DIRECTORY=""
+  info "Verified installer and platform assets at $DESTINATION"
 }
 
 offer_install() {
@@ -245,17 +275,19 @@ main() {
   local architecture command
   umask 077
   parse_arguments "$@"
-  for command in awk base64 curl find sha256sum; do
+  for command in awk base64 curl dirname find mktemp mv sha256sum; do
     require_command "$command"
   done
   architecture="$(detect_architecture)"
   read_credential
   TEMP_DIRECTORY="$(mktemp -d)"
+  prepare_staging
   install_zarf "$architecture"
   write_release_key
-  pull_bootstrap_assets "$architecture"
-  pull_platform_package "$architecture"
+  pull_bootstrap_assets "$architecture" "$STAGING_DIRECTORY"
+  pull_platform_package "$architecture" "$STAGING_DIRECTORY"
   HARBOR_SECRET=""
+  publish_destination
   offer_install "$architecture"
 }
 
