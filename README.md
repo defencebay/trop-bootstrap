@@ -4,10 +4,10 @@
 installation. It contains no TROP product code, customer configuration, registry
 credential, or release package.
 
-The launcher uses one per-device token to retrieve a private, architecture-specific
-bootstrap bundle and the signed TROP platform package from Defencebay Harbor. It
-verifies OCI digests, release checksums, and the Zarf package signature before it
-offers to run the private installer.
+The launcher uses one per-device token to retrieve private, architecture-specific
+installer assets and the signed TROP platform package from Defencebay Harbor. It
+downloads a pinned, checksum-verified Zarf client, verifies the signed bootstrap
+package and release checksums, and only then offers to run the private installer.
 
 ## Download
 
@@ -41,7 +41,7 @@ running `trop-install.sh setup` and again before deploying TROP.
 
 - Linux on `x86_64`/`amd64` or `aarch64`/`arm64`
 - Bash 4+
-- `curl`, `python3`, `tar`, `sha256sum`, `base64`, and standard Unix tools
+- `curl`, `sha256sum`, `base64`, and standard Unix tools
 - outbound HTTPS access to `registry.trop.defencebay.com`
 - a valid, project-scoped, pull-only TROP token
 

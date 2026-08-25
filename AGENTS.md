@@ -8,6 +8,8 @@ registry endpoint, or copied private documentation.
 - Use pull requests for `main`; never push implementation commits directly.
 - Keep the runtime artifact to the single `trop-bootstrap.sh` file.
 - Accept secrets only through a hidden prompt or standard input, never arguments.
-- Run ShellCheck, the integration tests, and a secret scan before publication.
-- Fail closed on malformed credentials, unexpected OCI media types, digest or
-  checksum mismatch, unsupported architecture, and missing release assets.
+- Use the release-pinned Zarf CLI for OCI registry operations; do not add a
+  second registry client or implement the distribution protocol here.
+- Run ShellCheck, the smoke test, and a secret scan before publication.
+- Fail closed on malformed credentials, checksum mismatch, unsupported
+  architecture, and missing release assets.

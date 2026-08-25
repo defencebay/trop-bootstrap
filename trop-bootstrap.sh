@@ -2,24 +2,18 @@
 set -euo pipefail
 
 readonly TROP_BOOTSTRAP_VERSION="0.1.0"
-readonly DEFAULT_REGISTRY_HOST="registry.trop.defencebay.com"
-readonly DEFAULT_REGISTRY_SCHEME="https"
-readonly DEFAULT_PROJECT="trop-releases"
-readonly DEFAULT_BOOTSTRAP_REPOSITORY="trop-bootstrap"
-readonly EXPECTED_ARTIFACT_TYPE="application/vnd.defencebay.trop.bootstrap.bundle.v1"
-readonly EXPECTED_LAYER_MEDIA_TYPE="application/vnd.defencebay.trop.bootstrap.layer.v1.tar+gzip"
-readonly OCI_MANIFEST_MEDIA_TYPE="application/vnd.oci.image.manifest.v1+json"
+readonly ZARF_VERSION="v0.70.1"
+readonly REGISTRY_HOST="registry.trop.defencebay.com"
+readonly HARBOR_PROJECT="trop-releases"
 
-REGISTRY_HOST="${TROP_REGISTRY_HOST:-$DEFAULT_REGISTRY_HOST}"
-REGISTRY_SCHEME="${TROP_REGISTRY_SCHEME:-$DEFAULT_REGISTRY_SCHEME}"
-PROJECT="${TROP_HARBOR_PROJECT:-$DEFAULT_PROJECT}"
-BOOTSTRAP_REPOSITORY="${TROP_BOOTSTRAP_REPOSITORY:-$DEFAULT_BOOTSTRAP_REPOSITORY}"
 RELEASE=""
 DESTINATION=""
 TOKEN_STDIN="false"
 FETCH_ONLY="false"
-BUNDLE_ONLY="false"
 TEMP_DIRECTORY=""
+HARBOR_USERNAME=""
+HARBOR_SECRET=""
+ZARF_BIN=""
 
 info() {
   printf '[trop-bootstrap] %s\n' "$*"
@@ -31,6 +25,7 @@ die() {
 }
 
 cleanup() {
+  HARBOR_SECRET=""
   if [[ -n "$TEMP_DIRECTORY" && -d "$TEMP_DIRECTORY" ]]; then
     rm -rf -- "$TEMP_DIRECTORY"
   fi
@@ -44,9 +39,8 @@ Usage: ./trop-bootstrap.sh --release RELEASE [options]
 Options:
   --release RELEASE  Immutable TROP release tag to retrieve
   --dest DIRECTORY   Output directory (default: $HOME/trop-RELEASE)
-  --token-stdin      Read the single TROP token from standard input
-  --fetch-only       Retrieve and verify assets, but never run the installer
-  --bundle-only      Retrieve only the private bootstrap bundle (diagnostics)
+  --token-stdin      Read the TROP token from standard input
+  --fetch-only       Retrieve and verify everything without running the installer
   --version          Print launcher version
   -h, --help         Show this help
 
@@ -100,117 +94,36 @@ read_credential() {
   encoded_username=""
   encoded_secret=""
 
-  [[ "$HARBOR_USERNAME" == "robot\$${PROJECT}+"* ]] ||
+  [[ "$HARBOR_USERNAME" == "robot\$${HARBOR_PROJECT}+"* ]] ||
     die "token is not scoped to the expected Harbor project"
   [[ ${#HARBOR_SECRET} -ge 16 ]] || die "Harbor robot secret is unexpectedly short"
-  [[ "$HARBOR_USERNAME" != *$'\n'* && "$HARBOR_USERNAME" != *$'\r'* ]] || die "invalid Harbor username"
-  [[ "$HARBOR_SECRET" != *$'\n'* && "$HARBOR_SECRET" != *$'\r'* ]] || die "invalid Harbor secret"
+  [[ "$HARBOR_USERNAME" != *$'\n'* && "$HARBOR_SECRET" != *$'\n'* ]] || die "invalid credential"
 }
 
-curl_config_escape() {
-  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+install_zarf() {
+  local architecture="$1" filename checksum expected_checksum download_url
+  filename="zarf_${ZARF_VERSION}_Linux_${architecture}"
+  case "$architecture" in
+    amd64) expected_checksum="a409b568ab8120f5cc3ed0cbbaa819f031750bb320b8b8e26a345c3e2ddaad2a" ;;
+    arm64) expected_checksum="ebaf0911749dbacf5280a88cf2a970717c3b6729819aadc9a25cc850eb04018e" ;;
+  esac
+  download_url="https://github.com/zarf-dev/zarf/releases/download/${ZARF_VERSION}/${filename}"
+
+  info "Downloading open-source Zarf ${ZARF_VERSION}"
+  ZARF_BIN="$TEMP_DIRECTORY/$filename"
+  curl --fail --silent --show-error --location --output "$ZARF_BIN" "$download_url"
+  checksum="$(sha256sum "$ZARF_BIN" | awk '{print $1}')"
+  [[ "$checksum" == "$expected_checksum" ]] || die "Zarf checksum verification failed"
+  chmod +x "$ZARF_BIN"
 }
 
-registry_bearer_token() {
-  local repository="$1" credentials response
-  credentials="$(curl_config_escape "${HARBOR_USERNAME}:${HARBOR_SECRET}")"
-  response="$(
-    printf 'user = "%s"\n' "$credentials" |
-      curl --config - --fail --silent --show-error --location --get \
-        "${REGISTRY_SCHEME}://${REGISTRY_HOST}/service/token" \
-        --data-urlencode 'service=harbor-registry' \
-        --data-urlencode "scope=repository:${repository}:pull"
-  )" || die "Harbor authentication failed"
-  credentials=""
-  printf '%s' "$response" | python3 -c '
-import json, sys
-payload = json.load(sys.stdin)
-token = payload.get("token") or payload.get("access_token")
-if not isinstance(token, str) or not token:
-    raise SystemExit("registry response did not contain a bearer token")
-print(token)
-'
-}
-
-curl_with_bearer() {
-  local bearer="$1" url="$2" output="$3" accept="${4:-}" escaped
-  escaped="$(curl_config_escape "Authorization: Bearer $bearer")"
-  if [[ -n "$accept" ]]; then
-    printf 'header = "%s"\n' "$escaped" |
-      curl --config - --fail --silent --show-error --location \
-        --header "Accept: $accept" --output "$output" "$url"
-  else
-    printf 'header = "%s"\n' "$escaped" |
-      curl --config - --fail --silent --show-error --location \
-        --output "$output" "$url"
-  fi
-}
-
-parse_manifest() {
-  local manifest="$1"
-  python3 - "$manifest" "$EXPECTED_ARTIFACT_TYPE" "$EXPECTED_LAYER_MEDIA_TYPE" <<'PY'
-import json
-import re
-import sys
-
-path, expected_artifact, expected_layer = sys.argv[1:]
-with open(path, encoding="utf-8") as handle:
-    manifest = json.load(handle)
-if manifest.get("schemaVersion") != 2:
-    raise SystemExit("unexpected OCI schema version")
-if manifest.get("artifactType") != expected_artifact:
-    raise SystemExit("unexpected OCI artifact type")
-layers = manifest.get("layers")
-if not isinstance(layers, list) or len(layers) != 1:
-    raise SystemExit("bootstrap manifest must contain exactly one layer")
-layer = layers[0]
-if layer.get("mediaType") != expected_layer:
-    raise SystemExit("unexpected bootstrap layer media type")
-digest = layer.get("digest", "")
-size = layer.get("size")
-if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-    raise SystemExit("invalid bootstrap layer digest")
-if not isinstance(size, int) or size <= 0:
-    raise SystemExit("invalid bootstrap layer size")
-print(digest, size)
-PY
-}
-
-extract_bundle_safely() {
-  local bundle="$1" target="$2"
-  python3 - "$bundle" "$target" <<'PY'
-import json
-import os
-from pathlib import Path
-import shutil
-import sys
-import tarfile
-
-bundle = Path(sys.argv[1])
-target = Path(sys.argv[2])
-target.mkdir(mode=0o700)
-with tarfile.open(bundle, "r:gz") as archive:
-    members = archive.getmembers()
-    names = [member.name for member in members]
-    if len(names) != len(set(names)):
-        raise SystemExit("duplicate path in bootstrap bundle")
-    for member in members:
-        if not member.isfile() or member.name != Path(member.name).name:
-            raise SystemExit(f"unsafe bootstrap bundle entry: {member.name}")
-        source = archive.extractfile(member)
-        if source is None:
-            raise SystemExit(f"unable to read bootstrap bundle entry: {member.name}")
-        destination = target / member.name
-        with destination.open("xb") as output:
-            shutil.copyfileobj(source, output)
-        os.chmod(destination, 0o755 if member.name == "trop-install.sh" or member.name.startswith("zarf_") else 0o600)
-
-metadata_path = target / "trop-bootstrap.json"
-with metadata_path.open(encoding="utf-8") as handle:
-    metadata = json.load(handle)
-if metadata.get("schema_version") != 1:
-    raise SystemExit("unsupported bootstrap metadata schema")
-PY
+write_release_key() {
+  cat >"$TEMP_DIRECTORY/trop-release.pub" <<'EOF'
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEpgpOxlPdPuLlOxFfmJesihZ0VmPr
+5UQTE+U6Y+ZT6QPUP1z7Kri3MsdEmK9WCakT11AcegVYGosnjzoYfEhmeA==
+-----END PUBLIC KEY-----
+EOF
 }
 
 verify_expected_checksum() {
@@ -221,13 +134,13 @@ verify_expected_checksum() {
   [[ "$actual" == "$expected" ]] || die "checksum verification failed for $(basename "$file")"
 }
 
-verify_extracted_bundle() {
-  local directory="$1" architecture="$2" release="$3"
-  local common_manifest="$directory/SHA256SUMS-common"
-  local arch_manifest="$directory/SHA256SUMS-$architecture"
-  local zarf_files init_files name
+verify_bootstrap_assets() {
+  local directory="$1" architecture="$2" common_manifest arch_manifest name
+  local zarf_files init_files
+  common_manifest="$directory/SHA256SUMS-common"
+  arch_manifest="$directory/SHA256SUMS-$architecture"
+  [[ -f "$common_manifest" && -f "$arch_manifest" ]] || die "checksum manifests are missing"
 
-  [[ -f "$common_manifest" && -f "$arch_manifest" ]] || die "bootstrap checksum manifests are missing"
   for name in trop-install.sh trop-release.pub trop-standalone-tools.tar.gz; do
     [[ -f "$directory/$name" ]] || die "bootstrap asset is missing: $name"
     verify_expected_checksum "$common_manifest" "$directory/$name"
@@ -241,70 +154,54 @@ verify_extracted_bundle() {
   [[ ${#init_files[@]} -eq 1 ]] || die "expected exactly one Zarf init package"
   verify_expected_checksum "$arch_manifest" "${zarf_files[0]}"
   verify_expected_checksum "$arch_manifest" "${init_files[0]}"
+  chmod +x "$directory/trop-install.sh" "${zarf_files[0]}"
+}
 
-  python3 - "$directory/trop-bootstrap.json" "$architecture" "$release" <<'PY'
-import json
-import sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    metadata = json.load(handle)
-if metadata.get("architecture") != sys.argv[2] or metadata.get("release") != sys.argv[3]:
-    raise SystemExit("bootstrap metadata does not match requested architecture/release")
-PY
+pull_bootstrap_assets() {
+  local architecture="$1" output staging reference auth_directory zarf_filename
+  output="$TEMP_DIRECTORY/extracted"
+  staging="$output/trop-bootstrap-documentation"
+  reference="oci://${REGISTRY_HOST}/${HARBOR_PROJECT}/${architecture}/trop-bootstrap:${RELEASE}"
+  auth_directory="$TEMP_DIRECTORY/registry-auth"
+  zarf_filename="zarf_${ZARF_VERSION}_Linux_${architecture}"
+  mkdir "$output" "$auth_directory"
+
+  info "Downloading private installer assets for ${RELEASE} (${architecture})"
+  printf '%s' "$HARBOR_SECRET" | DOCKER_CONFIG="$auth_directory" \
+    "$ZARF_BIN" tools registry login \
+    --username "$HARBOR_USERNAME" --password-stdin "$REGISTRY_HOST"
+  DOCKER_CONFIG="$auth_directory" "$ZARF_BIN" package inspect documentation "$reference" \
+    --architecture "$architecture" \
+    --key "$TEMP_DIRECTORY/trop-release.pub" \
+    --verify \
+    --output "$output"
+  [[ -d "$staging" ]] || die "Zarf did not extract the private installer assets"
+  cp "$ZARF_BIN" "$staging/$zarf_filename"
+  verify_bootstrap_assets "$staging" "$architecture"
+  mkdir -p "$(dirname "$DESTINATION")"
+  mv "$staging" "$DESTINATION"
+  info "Verified installer assets at $DESTINATION"
 }
 
 pull_platform_package() {
-  local directory="$1" architecture="$2" release="$3"
-  local zarf_binary package_name package_ref auth_directory
-  zarf_binary="$(find "$directory" -maxdepth 1 -type f -name "zarf_*_Linux_$architecture" -print -quit)"
-  package_name="zarf-package-trop-platform-${architecture}-${release}.tar.zst"
-  package_ref="oci://${REGISTRY_HOST}/${PROJECT}/${architecture}/trop-platform:${release}"
-  auth_directory="$(mktemp -d "$TEMP_DIRECTORY/registry-auth.XXXXXX")"
-  chmod +x "$zarf_binary"
+  local architecture="$1" zarf_binary package_name package_ref auth_directory
+  zarf_binary="$(find "$DESTINATION" -maxdepth 1 -type f -name "zarf_*_Linux_$architecture" -print -quit)"
+  package_name="zarf-package-trop-platform-${architecture}-${RELEASE}.tar.zst"
+  package_ref="oci://${REGISTRY_HOST}/${HARBOR_PROJECT}/${architecture}/trop-platform:${RELEASE}"
+  auth_directory="$TEMP_DIRECTORY/zarf-auth"
+  mkdir "$auth_directory"
 
-  info "Pulling and verifying signed TROP platform package"
-  (
-    export DOCKER_CONFIG="$auth_directory"
-    printf '%s' "$HARBOR_SECRET" | "$zarf_binary" tools registry login \
-      --username "$HARBOR_USERNAME" --password-stdin "$REGISTRY_HOST"
-    "$zarf_binary" package pull "$package_ref" \
-      --architecture "$architecture" \
-      --output-directory "$directory" \
-      --key "$directory/trop-release.pub" \
-      --verify
-  )
-  [[ -f "$directory/$package_name" ]] || die "Zarf pull did not create $package_name"
-  verify_expected_checksum "$directory/SHA256SUMS-$architecture" "$directory/$package_name"
-}
-
-retrieve_release() {
-  local architecture="$1" repository bearer manifest bundle layer_digest layer_size actual_digest actual_size staging
-  repository="${PROJECT}/${architecture}/${BOOTSTRAP_REPOSITORY}"
-  bearer="$(registry_bearer_token "$repository")" || die "unable to obtain Harbor registry token"
-  manifest="$TEMP_DIRECTORY/manifest.json"
-  bundle="$TEMP_DIRECTORY/bootstrap.tar.gz"
-  staging="$TEMP_DIRECTORY/extracted"
-
-  info "Retrieving private bootstrap manifest for $RELEASE ($architecture)"
-  curl_with_bearer "$bearer" \
-    "${REGISTRY_SCHEME}://${REGISTRY_HOST}/v2/${repository}/manifests/${RELEASE}" \
-    "$manifest" "$OCI_MANIFEST_MEDIA_TYPE" || die "unable to retrieve private bootstrap manifest"
-  read -r layer_digest layer_size < <(parse_manifest "$manifest") || die "invalid private bootstrap manifest"
-
-  info "Downloading private installer bundle"
-  curl_with_bearer "$bearer" \
-    "${REGISTRY_SCHEME}://${REGISTRY_HOST}/v2/${repository}/blobs/${layer_digest}" \
-    "$bundle" || die "unable to retrieve private bootstrap bundle"
-  bearer=""
-  actual_size="$(wc -c <"$bundle" | tr -d ' ')"
-  [[ "$actual_size" == "$layer_size" ]] || die "bootstrap bundle size mismatch"
-  actual_digest="sha256:$(sha256sum "$bundle" | awk '{print $1}')"
-  [[ "$actual_digest" == "$layer_digest" ]] || die "bootstrap bundle digest mismatch"
-
-  extract_bundle_safely "$bundle" "$staging"
-  verify_extracted_bundle "$staging" "$architecture" "$RELEASE"
-  mkdir -p "$(dirname "$DESTINATION")"
-  mv "$staging" "$DESTINATION"
-  info "Verified private installer bundle at $DESTINATION"
+  info "Pulling and verifying the signed TROP platform package"
+  printf '%s' "$HARBOR_SECRET" | DOCKER_CONFIG="$auth_directory" \
+    "$zarf_binary" tools registry login \
+    --username "$HARBOR_USERNAME" --password-stdin "$REGISTRY_HOST"
+  DOCKER_CONFIG="$auth_directory" "$zarf_binary" package pull "$package_ref" \
+    --architecture "$architecture" \
+    --output-directory "$DESTINATION" \
+    --key "$DESTINATION/trop-release.pub" \
+    --verify
+  [[ -f "$DESTINATION/$package_name" ]] || die "Zarf pull did not create $package_name"
+  verify_expected_checksum "$DESTINATION/SHA256SUMS-$architecture" "$DESTINATION/$package_name"
 }
 
 offer_install() {
@@ -315,46 +212,31 @@ offer_install() {
   if [[ "$FETCH_ONLY" == "true" || ! -t 0 ]]; then
     info "Fetch-only checkpoint reached; installer was not executed"
     printf 'Next: cd %q && ./trop-install.sh setup\n' "$DESTINATION"
-    return 0
+    return
   fi
 
   read -r -p 'Run the private TROP setup now? [y/N] ' answer
-  [[ "$answer" =~ ^[Yy]$ ]] || {
-    info "Installer was not executed"
-    return 0
-  }
+  [[ "$answer" =~ ^[Yy]$ ]] || return
   (cd "$DESTINATION" && ./trop-install.sh setup)
 
   read -r -p 'Deploy TROP to this computer now? [y/N] ' answer
-  [[ "$answer" =~ ^[Yy]$ ]] || {
-    info "Configuration created; deployment was not executed"
-    return 0
-  }
+  [[ "$answer" =~ ^[Yy]$ ]] || return
   (cd "$DESTINATION" && ./trop-install.sh deploy "$package" --init-package "$init_package")
 }
 
 parse_arguments() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --release)
-        [[ $# -ge 2 ]] || die "--release requires a value"
-        RELEASE="$2"
-        shift 2
-        ;;
-      --dest)
-        [[ $# -ge 2 ]] || die "--dest requires a value"
-        DESTINATION="$2"
-        shift 2
-        ;;
+      --release) [[ $# -ge 2 ]] || die "--release requires a value"; RELEASE="$2"; shift 2 ;;
+      --dest) [[ $# -ge 2 ]] || die "--dest requires a value"; DESTINATION="$2"; shift 2 ;;
       --token-stdin) TOKEN_STDIN="true"; shift ;;
       --fetch-only) FETCH_ONLY="true"; shift ;;
-      --bundle-only) BUNDLE_ONLY="true"; FETCH_ONLY="true"; shift ;;
       --version) printf '%s\n' "$TROP_BOOTSTRAP_VERSION"; exit 0 ;;
       -h | --help) usage; exit 0 ;;
       *) die "unknown argument: $1" ;;
     esac
   done
-  [[ "$RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "--release is required and must be a valid immutable tag"
+  [[ "$RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "--release is required and must be a valid tag"
   DESTINATION="${DESTINATION:-$HOME/trop-$RELEASE}"
   [[ ! -e "$DESTINATION" ]] || die "destination already exists: $DESTINATION"
 }
@@ -363,20 +245,18 @@ main() {
   local architecture command
   umask 077
   parse_arguments "$@"
-  for command in base64 curl find python3 sed sha256sum tar; do
+  for command in awk base64 curl find sha256sum; do
     require_command "$command"
   done
   architecture="$(detect_architecture)"
   read_credential
   TEMP_DIRECTORY="$(mktemp -d)"
-  retrieve_release "$architecture"
-  if [[ "$BUNDLE_ONLY" != "true" ]]; then
-    pull_platform_package "$DESTINATION" "$architecture" "$RELEASE"
-  fi
+  install_zarf "$architecture"
+  write_release_key
+  pull_bootstrap_assets "$architecture"
+  pull_platform_package "$architecture"
   HARBOR_SECRET=""
   offer_install "$architecture"
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  main "$@"
-fi
+main "$@"

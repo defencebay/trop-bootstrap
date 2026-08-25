@@ -17,7 +17,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends shellcheck
       - name: ShellCheck
         run: shellcheck trop-bootstrap.sh tools/create-token.sh tests/test-bootstrap.sh
-      - name: Integration tests
+      - name: Smoke test
         run: ./tests/test-bootstrap.sh
       - name: Reject obvious secret material
         run: if grep -RInE --exclude-dir=.git '(BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|robot\$trop-releases\+[^[:space:]]+:[^[:space:]]+|trop1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{20,})' .; then exit 1; fi
