@@ -172,7 +172,6 @@ pull_bootstrap_assets() {
     "$ZARF_BIN" tools registry login \
     --username "$HARBOR_USERNAME" --password-stdin "$REGISTRY_HOST"
   DOCKER_CONFIG="$auth_directory" "$ZARF_BIN" package inspect documentation "$reference" \
-    --architecture "$architecture" \
     --key "$TEMP_DIRECTORY/trop-release.pub" \
     --verify \
     --output "$output"
