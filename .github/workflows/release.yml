@@ -1,0 +1,22 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify tag matches launcher version
+        run: test "$GITHUB_REF_NAME" = "v$(./trop-bootstrap.sh --version)"
+      - name: Build checksum
+        run: sha256sum trop-bootstrap.sh > SHA256SUMS
+      - name: Publish immutable launcher assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" trop-bootstrap.sh SHA256SUMS --verify-tag --generate-notes
