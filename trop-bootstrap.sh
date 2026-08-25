@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
 readonly TROP_BOOTSTRAP_VERSION="0.1.0"
