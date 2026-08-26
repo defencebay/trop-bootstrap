@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
-readonly TROP_BOOTSTRAP_VERSION="0.1.1"
+readonly TROP_BOOTSTRAP_VERSION="0.2.0"
 # Bootstrap protocol v2 always uses this pinned client. The signed private
 # package carries the release-specific Zarf runtime used for platform pulls.
 readonly ZARF_VERSION="v0.70.1"
@@ -13,6 +13,7 @@ RELEASE=""
 DESTINATION=""
 TOKEN_STDIN="false"
 FETCH_ONLY="false"
+INSTALL_AFTER_FETCH=""
 TEMP_DIRECTORY=""
 STAGING_PARENT=""
 STAGING_DIRECTORY=""
@@ -44,7 +45,9 @@ trap cleanup EXIT
 
 usage() {
   cat <<'EOF'
-Usage: ./trop-bootstrap --release RELEASE [options]
+Usage: ./trop-bootstrap [--release RELEASE] [options]
+
+Run without arguments in a terminal to open the guided installer.
 
 Options:
   --release RELEASE  Immutable TROP release tag to retrieve
@@ -57,6 +60,86 @@ Options:
 The token is accepted only through a hidden prompt or standard input. It is
 never accepted as a command argument or environment variable.
 EOF
+}
+
+prompt_value() {
+  local prompt="$1" default="$2" variable="$3" value
+  if [[ -n "$default" ]]; then
+    printf '%s [%s]: ' "$prompt" "$default"
+  else
+    printf '%s: ' "$prompt"
+  fi
+  IFS= read -r value || die "input was interrupted"
+  printf -v "$variable" '%s' "${value:-$default}"
+}
+
+confirm_default_yes() {
+  local prompt="$1" answer
+  while true; do
+    prompt_value "$prompt (Y/n)" "Y" answer
+    case "$answer" in
+      y|Y|yes|YES|Yes) return 0 ;;
+      n|N|no|NO|No) return 1 ;;
+      *) printf 'Please enter y or n.\n' ;;
+    esac
+  done
+}
+
+guided_setup() {
+  local architecture="$1" action
+  cat <<'EOF'
+
+=== TROP Standalone Guided Installer ===
+
+This wizard downloads a signed TROP release and can install it on this computer.
+Press Enter to accept a recommended value. No token or password is shown in the
+review screen or written to shell history.
+
+EOF
+
+  printf 'The release tag is supplied with your TROP token (for example, r47-20260826).\n'
+  while true; do
+    prompt_value "TROP release tag" "" RELEASE
+    if [[ "$RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+      break
+    fi
+    printf 'Enter the release tag supplied by your TROP administrator.\n'
+  done
+
+  prompt_value "Download directory" "${DESTINATION:-$HOME/trop-$RELEASE}" DESTINATION
+
+  if [[ "$FETCH_ONLY" == "true" ]]; then
+    INSTALL_AFTER_FETCH="false"
+  else
+    while true; do
+      cat <<'EOF'
+
+What should this wizard do?
+  1. Download, verify, configure, and install TROP (recommended)
+  2. Download and verify the release only
+  0. Exit without making changes
+EOF
+      prompt_value "Choose an option" "1" action
+      case "$action" in
+        1) INSTALL_AFTER_FETCH="true"; FETCH_ONLY="false"; break ;;
+        2) INSTALL_AFTER_FETCH="false"; FETCH_ONLY="true"; break ;;
+        0) info "No changes were made"; exit 0 ;;
+        *) printf 'Please choose 1, 2, or 0.\n' ;;
+      esac
+    done
+  fi
+
+  cat <<EOF
+
+Review
+  Release:       $RELEASE
+  Architecture:  $architecture
+  Destination:   $DESTINATION
+  Action:        $(if [[ "$INSTALL_AFTER_FETCH" == "true" ]]; then printf 'download and install'; else printf 'download only'; fi)
+
+The release and its signatures will be verified before any installation starts.
+EOF
+  confirm_default_yes "Continue?" || { info "No changes were made"; exit 0; }
 }
 
 clear_registry_credentials() {
@@ -253,18 +336,20 @@ offer_install() {
   package="$DESTINATION/zarf-package-trop-platform-${architecture}-${RELEASE}.tar.zst"
   init_package="$(find "$DESTINATION" -maxdepth 1 -type f -name "zarf-init-${architecture}-*.tar.zst" -print -quit)"
 
-  if [[ "$FETCH_ONLY" == "true" || ! -t 0 ]]; then
+  if [[ "$FETCH_ONLY" == "true" || "$INSTALL_AFTER_FETCH" == "false" || ! -t 0 ]]; then
     info "Fetch-only checkpoint reached; installer was not executed"
     printf 'Next:\n'
     print_resume_commands "$package" "$init_package"
     return
   fi
 
-  read -r -p 'Configure and deploy TROP on this computer now? [y/N] ' answer
-  if [[ ! "$answer" =~ ^[Yy]$ ]]; then
-    printf 'Resume later:\n'
-    print_resume_commands "$package" "$init_package"
-    return
+  if [[ "$INSTALL_AFTER_FETCH" != "true" ]]; then
+    read -r -p 'Configure and deploy TROP on this computer now? [y/N] ' answer
+    if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+      printf 'Resume later:\n'
+      print_resume_commands "$package" "$init_package"
+      return
+    fi
   fi
   if ! (cd "$DESTINATION" && ./trop-install.sh setup); then
     printf 'Setup failed. Resume with:\n'
@@ -290,6 +375,9 @@ parse_arguments() {
       *) die "unknown argument: $1" ;;
     esac
   done
+}
+
+finalize_options() {
   [[ "$RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "--release is required and must be a valid tag"
   DESTINATION="${DESTINATION:-$HOME/trop-$RELEASE}"
   [[ ! -e "$DESTINATION" ]] || die "destination already exists: $DESTINATION"
@@ -303,6 +391,11 @@ main() {
     require_command "$command"
   done
   architecture="$(detect_architecture)"
+  if [[ -z "$RELEASE" ]]; then
+    [[ -t 0 ]] || die "--release is required when standard input is not a terminal"
+    guided_setup "$architecture"
+  fi
+  finalize_options
   TEMP_DIRECTORY="$(mktemp -d)"
   prepare_staging
   install_zarf "$architecture"
