@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
-readonly TROP_BOOTSTRAP_VERSION="0.1.0"
-# Bootstrap protocol v1 always uses this pinned client. The signed private
+readonly TROP_BOOTSTRAP_VERSION="0.1.1"
+# Bootstrap protocol v2 always uses this pinned client. The signed private
 # package carries the release-specific Zarf runtime used for platform pulls.
 readonly ZARF_VERSION="v0.70.1"
 readonly REGISTRY_HOST="registry.trop.defencebay.com"
@@ -19,6 +19,7 @@ STAGING_DIRECTORY=""
 HARBOR_USERNAME=""
 HARBOR_SECRET=""
 ZARF_BIN=""
+REGISTRY_AUTH_DIRECTORY=""
 
 info() {
   printf '[trop-bootstrap] %s\n' "$*"
@@ -31,6 +32,7 @@ die() {
 
 cleanup() {
   HARBOR_SECRET=""
+  HARBOR_USERNAME=""
   if [[ -n "$TEMP_DIRECTORY" && -d "$TEMP_DIRECTORY" ]]; then
     rm -rf -- "$TEMP_DIRECTORY"
   fi
@@ -42,7 +44,7 @@ trap cleanup EXIT
 
 usage() {
   cat <<'EOF'
-Usage: ./trop-bootstrap.sh --release RELEASE [options]
+Usage: ./trop-bootstrap --release RELEASE [options]
 
 Options:
   --release RELEASE  Immutable TROP release tag to retrieve
@@ -55,6 +57,15 @@ Options:
 The token is accepted only through a hidden prompt or standard input. It is
 never accepted as a command argument or environment variable.
 EOF
+}
+
+clear_registry_credentials() {
+  HARBOR_SECRET=""
+  HARBOR_USERNAME=""
+  if [[ -n "$REGISTRY_AUTH_DIRECTORY" && -d "$REGISTRY_AUTH_DIRECTORY" ]]; then
+    rm -rf -- "$REGISTRY_AUTH_DIRECTORY"
+  fi
+  REGISTRY_AUTH_DIRECTORY=""
 }
 
 require_command() {
@@ -158,7 +169,7 @@ verify_bootstrap_assets() {
   zarf_files=("$directory"/zarf_*_Linux_"$architecture")
   init_files=("$directory"/zarf-init-"$architecture"-*.tar.zst)
   shopt -u nullglob
-  [[ ${#zarf_files[@]} -eq 1 ]] || die "expected exactly one Zarf binary"
+  [[ ${#zarf_files[@]} -eq 1 ]] || die "release $RELEASE uses an unsupported legacy bootstrap format; select a qualified release that carries exactly one Zarf runtime"
   [[ ${#init_files[@]} -eq 1 ]] || die "expected exactly one Zarf init package"
   verify_expected_checksum "$arch_manifest" "${zarf_files[0]}"
   verify_expected_checksum "$arch_manifest" "${init_files[0]}"
@@ -169,55 +180,46 @@ prepare_staging() {
   local destination_parent
   destination_parent="$(dirname "$DESTINATION")"
   mkdir -p "$destination_parent"
+  destination_parent="$(cd "$destination_parent" && pwd)"
+  DESTINATION="$destination_parent/$(basename "$DESTINATION")"
   STAGING_PARENT="$(mktemp -d "$destination_parent/.trop-${RELEASE}.partial.XXXXXX")"
   STAGING_DIRECTORY="$STAGING_PARENT/payload"
 }
 
+registry_login() {
+  REGISTRY_AUTH_DIRECTORY="$TEMP_DIRECTORY/registry-auth"
+  mkdir "$REGISTRY_AUTH_DIRECTORY"
+  printf '%s' "$HARBOR_SECRET" | DOCKER_CONFIG="$REGISTRY_AUTH_DIRECTORY" \
+    "$ZARF_BIN" tools registry login \
+    --username "$HARBOR_USERNAME" --password-stdin "$REGISTRY_HOST"
+}
+
 pull_bootstrap_assets() {
-  local architecture="$1" destination="$2" output staging reference auth_directory zarf_filename
-  local release_zarf_files
+  local architecture="$1" destination="$2" output staging reference
   output="$TEMP_DIRECTORY/extracted"
   staging="$output/trop-bootstrap-documentation"
   reference="oci://${REGISTRY_HOST}/${HARBOR_PROJECT}/${architecture}/trop-bootstrap:${RELEASE}"
-  auth_directory="$TEMP_DIRECTORY/registry-auth"
-  zarf_filename="zarf_${ZARF_VERSION}_Linux_${architecture}"
-  mkdir "$output" "$auth_directory"
+  mkdir "$output"
 
   info "Downloading private installer assets for ${RELEASE} (${architecture})"
-  printf '%s' "$HARBOR_SECRET" | DOCKER_CONFIG="$auth_directory" \
-    "$ZARF_BIN" tools registry login \
-    --username "$HARBOR_USERNAME" --password-stdin "$REGISTRY_HOST"
-  DOCKER_CONFIG="$auth_directory" "$ZARF_BIN" package inspect documentation "$reference" \
+  DOCKER_CONFIG="$REGISTRY_AUTH_DIRECTORY" "$ZARF_BIN" package inspect documentation "$reference" \
     --architecture skeleton \
     --key "$TEMP_DIRECTORY/trop-release.pub" \
     --verify \
     --output "$output"
   [[ -d "$staging" ]] || die "Zarf did not extract the private installer assets"
-  shopt -s nullglob
-  release_zarf_files=("$staging"/zarf_*_Linux_"$architecture")
-  shopt -u nullglob
-  [[ ${#release_zarf_files[@]} -le 1 ]] || die "bootstrap package contains multiple Zarf runtimes"
-  if [[ ${#release_zarf_files[@]} -eq 0 ]]; then
-    cp "$ZARF_BIN" "$staging/$zarf_filename"
-  fi
   verify_bootstrap_assets "$staging" "$architecture"
   mv "$staging" "$destination"
   info "Verified private installer assets"
 }
 
 pull_platform_package() {
-  local architecture="$1" destination="$2" zarf_binary package_name package_ref auth_directory
+  local architecture="$1" destination="$2" zarf_binary package_name package_ref
   zarf_binary="$(find "$destination" -maxdepth 1 -type f -name "zarf_*_Linux_$architecture" -print -quit)"
   package_name="zarf-package-trop-platform-${architecture}-${RELEASE}.tar.zst"
   package_ref="oci://${REGISTRY_HOST}/${HARBOR_PROJECT}/${architecture}/trop-platform:${RELEASE}"
-  auth_directory="$TEMP_DIRECTORY/zarf-auth"
-  mkdir "$auth_directory"
-
   info "Pulling and verifying the signed TROP platform package"
-  printf '%s' "$HARBOR_SECRET" | DOCKER_CONFIG="$auth_directory" \
-    "$zarf_binary" tools registry login \
-    --username "$HARBOR_USERNAME" --password-stdin "$REGISTRY_HOST"
-  DOCKER_CONFIG="$auth_directory" "$zarf_binary" package pull "$package_ref" \
+  DOCKER_CONFIG="$REGISTRY_AUTH_DIRECTORY" "$zarf_binary" package pull "$package_ref" \
     --architecture "$architecture" \
     --output-directory "$destination" \
     --key "$destination/trop-release.pub" \
@@ -234,6 +236,18 @@ publish_destination() {
   info "Verified installer and platform assets at $DESTINATION"
 }
 
+print_resume_commands() {
+  local package="$1" init_package="$2"
+  printf '  cd %q\n  ./trop-install.sh setup\n' "$DESTINATION"
+  print_deploy_command "$package" "$init_package"
+}
+
+print_deploy_command() {
+  local package="$1" init_package="$2"
+  printf '  ./trop-install.sh deploy %q --init-package %q\n' \
+    "$(basename "$package")" "$(basename "$init_package")"
+}
+
 offer_install() {
   local architecture="$1" package init_package answer
   package="$DESTINATION/zarf-package-trop-platform-${architecture}-${RELEASE}.tar.zst"
@@ -241,17 +255,27 @@ offer_install() {
 
   if [[ "$FETCH_ONLY" == "true" || ! -t 0 ]]; then
     info "Fetch-only checkpoint reached; installer was not executed"
-    printf 'Next: cd %q && ./trop-install.sh setup\n' "$DESTINATION"
+    printf 'Next:\n'
+    print_resume_commands "$package" "$init_package"
     return
   fi
 
-  read -r -p 'Run the private TROP setup now? [y/N] ' answer
-  [[ "$answer" =~ ^[Yy]$ ]] || return
-  (cd "$DESTINATION" && ./trop-install.sh setup)
-
-  read -r -p 'Deploy TROP to this computer now? [y/N] ' answer
-  [[ "$answer" =~ ^[Yy]$ ]] || return
-  (cd "$DESTINATION" && ./trop-install.sh deploy "$package" --init-package "$init_package")
+  read -r -p 'Configure and deploy TROP on this computer now? [y/N] ' answer
+  if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+    printf 'Resume later:\n'
+    print_resume_commands "$package" "$init_package"
+    return
+  fi
+  if ! (cd "$DESTINATION" && ./trop-install.sh setup); then
+    printf 'Setup failed. Resume with:\n'
+    print_resume_commands "$package" "$init_package"
+    return 1
+  fi
+  if ! (cd "$DESTINATION" && ./trop-install.sh deploy "$package" --init-package "$init_package"); then
+    printf 'Deploy failed. Keep the existing config and resume with:\n  cd %q\n' "$DESTINATION"
+    print_deploy_command "$package" "$init_package"
+    return 1
+  fi
 }
 
 parse_arguments() {
@@ -279,15 +303,18 @@ main() {
     require_command "$command"
   done
   architecture="$(detect_architecture)"
-  read_credential
   TEMP_DIRECTORY="$(mktemp -d)"
   prepare_staging
   install_zarf "$architecture"
   write_release_key
+  read_credential
+  registry_login
   pull_bootstrap_assets "$architecture" "$STAGING_DIRECTORY"
   pull_platform_package "$architecture" "$STAGING_DIRECTORY"
-  HARBOR_SECRET=""
+  clear_registry_credentials
   publish_destination
+  rm -rf -- "$TEMP_DIRECTORY"
+  TEMP_DIRECTORY=""
   offer_install "$architecture"
 }
 
