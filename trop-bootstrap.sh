@@ -2,25 +2,31 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
-readonly TROP_BOOTSTRAP_VERSION="0.2.0"
-# Bootstrap protocol v2 always uses this pinned client. The signed private
+readonly TROP_BOOTSTRAP_VERSION="0.3.0"
+# Bootstrap protocol v3 always uses this pinned client. The signed private
 # package carries the release-specific Zarf runtime used for platform pulls.
 readonly ZARF_VERSION="v0.70.1"
 readonly REGISTRY_HOST="registry.trop.defencebay.com"
 readonly HARBOR_PROJECT="trop-releases"
+readonly INSTALL_ROOT="/opt/trop"
+readonly SYSTEM_CONFIG_FILE="/etc/trop/zarf-config.yaml"
+readonly SYSTEM_ENCRYPTED_CONFIG_FILE="/etc/trop/zarf-config.enc.yaml"
 
 RELEASE=""
 DESTINATION=""
 TOKEN_STDIN="false"
 FETCH_ONLY="false"
 INSTALL_AFTER_FETCH=""
+EXISTING_CONFIG=""
 TEMP_DIRECTORY=""
 STAGING_PARENT=""
 STAGING_DIRECTORY=""
+PUBLISH_PARTIAL_DIRECTORY=""
 HARBOR_USERNAME=""
 HARBOR_SECRET=""
 ZARF_BIN=""
 REGISTRY_AUTH_DIRECTORY=""
+INSTALLATION_STATE=""
 
 info() {
   printf '[trop-bootstrap] %s\n' "$*"
@@ -40,6 +46,9 @@ cleanup() {
   if [[ -n "$STAGING_PARENT" && -d "$STAGING_PARENT" ]]; then
     rm -rf -- "$STAGING_PARENT"
   fi
+  if [[ -n "$PUBLISH_PARTIAL_DIRECTORY" ]]; then
+    run_as_root rm -rf -- "$PUBLISH_PARTIAL_DIRECTORY" >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 
@@ -51,7 +60,8 @@ Run without arguments in a terminal to open the guided installer.
 
 Options:
   --release RELEASE  Immutable TROP release tag to retrieve
-  --dest DIRECTORY   Output directory (default: $HOME/trop-RELEASE)
+  --dest DIRECTORY   Release directory (default: /opt/trop/releases/RELEASE)
+  --config FILE      Import plaintext config from an earlier home-directory install
   --token-stdin      Read the TROP token from standard input
   --fetch-only       Retrieve and verify everything without running the installer
   --version          Print launcher version
@@ -106,7 +116,7 @@ EOF
     printf 'Enter the release tag supplied by your TROP administrator.\n'
   done
 
-  prompt_value "Download directory" "${DESTINATION:-$HOME/trop-$RELEASE}" DESTINATION
+  prompt_value "Release directory" "${DESTINATION:-$INSTALL_ROOT/releases/$RELEASE}" DESTINATION
 
   if [[ "$FETCH_ONLY" == "true" ]]; then
     INSTALL_AFTER_FETCH="false"
@@ -135,11 +145,67 @@ Review
   Release:       $RELEASE
   Architecture:  $architecture
   Destination:   $DESTINATION
+  Configuration: $(if [[ -n "$EXISTING_CONFIG" ]]; then printf 'import %s' "$EXISTING_CONFIG"; elif is_system_destination; then printf '%s' "$SYSTEM_CONFIG_FILE"; else printf '%s/zarf-config.yaml' "$DESTINATION"; fi)
   Action:        $(if [[ "$INSTALL_AFTER_FETCH" == "true" ]]; then printf 'download and install'; else printf 'download only'; fi)
 
 The release and its signatures will be verified before any installation starts.
 EOF
   confirm_default_yes "Continue?" || { info "No changes were made"; exit 0; }
+}
+
+is_system_destination() {
+  [[ "$DESTINATION" == "$INSTALL_ROOT/releases/$RELEASE" ]]
+}
+
+system_config_exists() {
+  [[ -f "$SYSTEM_CONFIG_FILE" || -f "$SYSTEM_ENCRYPTED_CONFIG_FILE" ]]
+}
+
+detect_installation_state() {
+  local detected="" state_args=()
+  [[ -z "$INSTALLATION_STATE" ]] || return 0
+  if ! is_system_destination; then
+    INSTALLATION_STATE="fresh"
+    return 0
+  fi
+  if [[ -n "$EXISTING_CONFIG" ]]; then
+    state_args+=(--legacy-config "$EXISTING_CONFIG")
+  fi
+  detected="$(run_as_root "$DESTINATION/trop-install.sh" installation-state "${state_args[@]}" 2>/dev/null || true)"
+  case "$detected" in
+    fresh|installed|ambiguous) INSTALLATION_STATE="$detected" ;;
+    *) INSTALLATION_STATE="ambiguous" ;;
+  esac
+}
+
+existing_install_detected() {
+  detect_installation_state
+  [[ "$INSTALLATION_STATE" == "installed" ]]
+}
+
+print_ambiguous_state() {
+  cat <<EOF
+The release was verified at $DESTINATION, but this host contains a partial or
+degraded installation state. No setup, deploy, or update command was selected
+automatically, and existing secrets were not changed.
+
+Inspect the host before continuing. For a known incomplete first install, resume
+the verified release with 'deploy'. For a previously working installation,
+restore its k3s/Zarf state and run the bootstrap again so it can select 'update'.
+EOF
+}
+
+run_as_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+    return
+  fi
+  command -v sudo >/dev/null 2>&1 || die "sudo is required for the default system installation"
+  if [[ "$TOKEN_STDIN" != "true" && -t 0 ]]; then
+    sudo "$@"
+  else
+    sudo -n "$@"
+  fi
 }
 
 clear_registry_credentials() {
@@ -243,10 +309,12 @@ verify_bootstrap_assets() {
   arch_manifest="$directory/SHA256SUMS-$architecture"
   [[ -f "$common_manifest" && -f "$arch_manifest" ]] || die "checksum manifests are missing"
 
-  for name in trop-install.sh trop-release.pub trop-standalone-tools.tar.gz; do
+  for name in trop-install.sh trop-release.pub trop-standalone-tools.tar.gz trop-layout-contract; do
     [[ -f "$directory/$name" ]] || die "bootstrap asset is missing: $name"
     verify_expected_checksum "$common_manifest" "$directory/$name"
   done
+  [[ "$(cat "$directory/trop-layout-contract")" == "trop-system-layout-v1" ]] ||
+    die "release $RELEASE does not support the system installation layout; use bootstrap 0.2 for that immutable release"
 
   shopt -s nullglob
   zarf_files=("$directory"/zarf_*_Linux_"$architecture")
@@ -262,10 +330,15 @@ verify_bootstrap_assets() {
 prepare_staging() {
   local destination_parent
   destination_parent="$(dirname "$DESTINATION")"
-  mkdir -p "$destination_parent"
-  destination_parent="$(cd "$destination_parent" && pwd)"
-  DESTINATION="$destination_parent/$(basename "$DESTINATION")"
-  STAGING_PARENT="$(mktemp -d "$destination_parent/.trop-${RELEASE}.partial.XXXXXX")"
+  if is_system_destination; then
+    DESTINATION="$INSTALL_ROOT/releases/$RELEASE"
+    STAGING_PARENT="$(mktemp -d "${TMPDIR:-/tmp}/trop-${RELEASE}.partial.XXXXXX")"
+  else
+    mkdir -p "$destination_parent"
+    destination_parent="$(cd "$destination_parent" && pwd)"
+    DESTINATION="$destination_parent/$(basename "$DESTINATION")"
+    STAGING_PARENT="$(mktemp -d "$destination_parent/.trop-${RELEASE}.partial.XXXXXX")"
+  fi
   STAGING_DIRECTORY="$STAGING_PARENT/payload"
 }
 
@@ -311,8 +384,27 @@ pull_platform_package() {
 }
 
 publish_destination() {
-  [[ ! -e "$DESTINATION" ]] || die "destination appeared while downloading: $DESTINATION"
-  mv -T -- "$STAGING_DIRECTORY" "$DESTINATION"
+  local partial_destination
+  [[ ! -e "$DESTINATION" && ! -L "$DESTINATION" ]] || die "destination appeared while downloading: $DESTINATION"
+  if is_system_destination; then
+    run_as_root install -d -o root -g root -m 0755 "$INSTALL_ROOT" "$INSTALL_ROOT/releases"
+    partial_destination="$(run_as_root mktemp -d "$INSTALL_ROOT/releases/.${RELEASE}.partial.XXXXXX")"
+    PUBLISH_PARTIAL_DIRECTORY="$partial_destination"
+    if ! run_as_root cp -a "$STAGING_DIRECTORY/." "$partial_destination/"; then
+      run_as_root rm -rf -- "$partial_destination"
+      die "could not copy the verified release into $INSTALL_ROOT/releases"
+    fi
+    run_as_root chown -R root:root "$partial_destination"
+    run_as_root chmod -R a+rX,go-w "$partial_destination"
+    if ! run_as_root mv -T -- "$partial_destination" "$DESTINATION"; then
+      run_as_root rm -rf -- "$partial_destination"
+      die "could not publish the verified release at $DESTINATION"
+    fi
+    PUBLISH_PARTIAL_DIRECTORY=""
+    rm -rf -- "$STAGING_DIRECTORY"
+  else
+    mv -T -- "$STAGING_DIRECTORY" "$DESTINATION"
+  fi
   rmdir "$STAGING_PARENT"
   STAGING_PARENT=""
   STAGING_DIRECTORY=""
@@ -321,23 +413,46 @@ publish_destination() {
 
 print_resume_commands() {
   local package="$1" init_package="$2"
-  printf '  cd %q\n  ./trop-install.sh setup\n' "$DESTINATION"
+  printf '  cd %q\n' "$DESTINATION"
+  if is_system_destination; then
+    if [[ -n "$EXISTING_CONFIG" ]]; then
+      printf '  sudo ./trop-install.sh setup --import-config %q\n' "$EXISTING_CONFIG"
+    elif system_config_exists; then
+      printf '  # Reusing the existing configuration in /etc/trop\n'
+    else
+      printf '  sudo ./trop-install.sh setup\n'
+    fi
+  else
+    printf '  ./trop-install.sh setup\n'
+  fi
   print_deploy_command "$package" "$init_package"
 }
 
 print_deploy_command() {
   local package="$1" init_package="$2"
-  printf '  ./trop-install.sh deploy %q --init-package %q\n' \
-    "$(basename "$package")" "$(basename "$init_package")"
+  if existing_install_detected; then
+    printf '  sudo ./trop-install.sh update %q\n' "$(basename "$package")"
+  elif is_system_destination; then
+    printf '  sudo ./trop-install.sh deploy %q --init-package %q\n' \
+      "$(basename "$package")" "$(basename "$init_package")"
+  else
+    printf '  ./trop-install.sh deploy %q --init-package %q\n' \
+      "$(basename "$package")" "$(basename "$init_package")"
+  fi
 }
 
 offer_install() {
-  local architecture="$1" package init_package answer
+  local architecture="$1" package init_package answer run_setup="true" apply_mode="deploy"
   package="$DESTINATION/zarf-package-trop-platform-${architecture}-${RELEASE}.tar.zst"
   init_package="$(find "$DESTINATION" -maxdepth 1 -type f -name "zarf-init-${architecture}-*.tar.zst" -print -quit)"
+  detect_installation_state
 
   if [[ "$FETCH_ONLY" == "true" || "$INSTALL_AFTER_FETCH" == "false" || ! -t 0 ]]; then
     info "Fetch-only checkpoint reached; installer was not executed"
+    if [[ "$INSTALLATION_STATE" == "ambiguous" ]]; then
+      print_ambiguous_state
+      return
+    fi
     printf 'Next:\n'
     print_resume_commands "$package" "$init_package"
     return
@@ -351,13 +466,48 @@ offer_install() {
       return
     fi
   fi
-  if ! (cd "$DESTINATION" && ./trop-install.sh setup); then
-    printf 'Setup failed. Resume with:\n'
-    print_resume_commands "$package" "$init_package"
+
+  if [[ "$INSTALLATION_STATE" == "ambiguous" ]]; then
+    print_ambiguous_state >&2
     return 1
   fi
-  if ! (cd "$DESTINATION" && ./trop-install.sh deploy "$package" --init-package "$init_package"); then
-    printf 'Deploy failed. Keep the existing config and resume with:\n  cd %q\n' "$DESTINATION"
+
+  if is_system_destination && [[ -z "$EXISTING_CONFIG" ]] && system_config_exists; then
+    info "Reusing existing configuration in /etc/trop"
+    run_setup="false"
+  fi
+
+  local setup_command=(./trop-install.sh setup)
+  if [[ -n "$EXISTING_CONFIG" ]]; then
+    setup_command+=(--import-config "$EXISTING_CONFIG")
+  fi
+  if [[ "$run_setup" == "true" ]]; then
+    if is_system_destination; then
+      (cd "$DESTINATION" && run_as_root "${setup_command[@]}") || {
+        printf 'Setup failed. Resume with:\n'
+        print_resume_commands "$package" "$init_package"
+        return 1
+      }
+    elif ! (cd "$DESTINATION" && "${setup_command[@]}"); then
+      printf 'Setup failed. Resume with:\n'
+      print_resume_commands "$package" "$init_package"
+      return 1
+    fi
+  fi
+  local deploy_command=(./trop-install.sh deploy "$package" --init-package "$init_package")
+  if existing_install_detected; then
+    apply_mode="update"
+    deploy_command=(./trop-install.sh update "$package")
+    info "Updating the existing TROP installation"
+  fi
+  if is_system_destination; then
+    (cd "$DESTINATION" && run_as_root "${deploy_command[@]}") || {
+      printf '%s failed. Keep the existing config and resume with:\n  cd %q\n' "${apply_mode^}" "$DESTINATION"
+      print_deploy_command "$package" "$init_package"
+      return 1
+    }
+  elif ! (cd "$DESTINATION" && "${deploy_command[@]}"); then
+    printf '%s failed. Keep the existing config and resume with:\n  cd %q\n' "${apply_mode^}" "$DESTINATION"
     print_deploy_command "$package" "$init_package"
     return 1
   fi
@@ -368,6 +518,7 @@ parse_arguments() {
     case "$1" in
       --release) [[ $# -ge 2 ]] || die "--release requires a value"; RELEASE="$2"; shift 2 ;;
       --dest) [[ $# -ge 2 ]] || die "--dest requires a value"; DESTINATION="$2"; shift 2 ;;
+      --config) [[ $# -ge 2 ]] || die "--config requires a value"; EXISTING_CONFIG="$2"; shift 2 ;;
       --token-stdin) TOKEN_STDIN="true"; shift ;;
       --fetch-only) FETCH_ONLY="true"; shift ;;
       --version) printf '%s\n' "$TROP_BOOTSTRAP_VERSION"; exit 0 ;;
@@ -379,15 +530,19 @@ parse_arguments() {
 
 finalize_options() {
   [[ "$RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "--release is required and must be a valid tag"
-  DESTINATION="${DESTINATION:-$HOME/trop-$RELEASE}"
-  [[ ! -e "$DESTINATION" ]] || die "destination already exists: $DESTINATION"
+  DESTINATION="${DESTINATION:-$INSTALL_ROOT/releases/$RELEASE}"
+  if [[ -n "$EXISTING_CONFIG" ]]; then
+    [[ -f "$EXISTING_CONFIG" && -r "$EXISTING_CONFIG" ]] || die "configuration file is not readable: $EXISTING_CONFIG"
+    EXISTING_CONFIG="$(cd "$(dirname "$EXISTING_CONFIG")" && pwd)/$(basename "$EXISTING_CONFIG")"
+  fi
+  [[ ! -e "$DESTINATION" && ! -L "$DESTINATION" ]] || die "destination already exists: $DESTINATION"
 }
 
 main() {
   local architecture command
   umask 077
   parse_arguments "$@"
-  for command in awk base64 curl dirname find mktemp mv sha256sum; do
+  for command in awk base64 cat cp curl dirname find install mktemp mv sha256sum; do
     require_command "$command"
   done
   architecture="$(detect_architecture)"
@@ -396,6 +551,10 @@ main() {
     guided_setup "$architecture"
   fi
   finalize_options
+  if is_system_destination; then
+    info "Checking permission to use $INSTALL_ROOT"
+    run_as_root true || die "sudo authorization is required; run 'sudo -v' first"
+  fi
   TEMP_DIRECTORY="$(mktemp -d)"
   prepare_staging
   install_zarf "$architecture"
