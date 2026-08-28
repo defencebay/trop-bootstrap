@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
-readonly TROP_BOOTSTRAP_VERSION="0.3.0"
+readonly TROP_BOOTSTRAP_VERSION="0.4.0"
 # Bootstrap protocol v3 always uses this pinned client. The signed private
 # package carries the release-specific Zarf runtime used for platform pulls.
 readonly ZARF_VERSION="v0.70.1"
@@ -16,6 +16,7 @@ RELEASE=""
 DESTINATION=""
 TOKEN_STDIN="false"
 FETCH_ONLY="false"
+LIST_RELEASES="false"
 INSTALL_AFTER_FETCH=""
 EXISTING_CONFIG=""
 TEMP_DIRECTORY=""
@@ -27,6 +28,9 @@ HARBOR_SECRET=""
 ZARF_BIN=""
 REGISTRY_AUTH_DIRECTORY=""
 INSTALLATION_STATE=""
+AVAILABLE_RELEASES=""
+LATEST_RELEASE=""
+ACTIVE_RELEASE=""
 
 info() {
   printf '[trop-bootstrap] %s\n' "$*"
@@ -50,7 +54,6 @@ cleanup() {
     run_as_root rm -rf -- "$PUBLISH_PARTIAL_DIRECTORY" >/dev/null 2>&1 || true
   fi
 }
-trap cleanup EXIT
 
 usage() {
   cat <<'EOF'
@@ -59,7 +62,8 @@ Usage: ./trop-bootstrap [--release RELEASE] [options]
 Run without arguments in a terminal to open the guided installer.
 
 Options:
-  --release RELEASE  Immutable TROP release tag to retrieve
+  --release RELEASE  Immutable release tag, or 'latest'
+  --list-releases    List stable releases available to this token and exit
   --dest DIRECTORY   Release directory (default: /opt/trop/releases/RELEASE)
   --config FILE      Import plaintext config from an earlier home-directory install
   --token-stdin      Read the TROP token from standard input
@@ -95,8 +99,7 @@ confirm_default_yes() {
   done
 }
 
-guided_setup() {
-  local architecture="$1" action
+guided_intro() {
   cat <<'EOF'
 
 === TROP Standalone Guided Installer ===
@@ -106,14 +109,22 @@ Press Enter to accept a recommended value. No token or password is shown in the
 review screen or written to shell history.
 
 EOF
+}
 
-  printf 'The release tag is supplied with your TROP token (for example, r47-20260826).\n'
+guided_setup() {
+  local architecture="$1" action release
+
+  printf 'Available stable releases for %s:\n' "$architecture"
+  print_available_releases 10
+  printf '\n'
+
   while true; do
-    prompt_value "TROP release tag" "" RELEASE
-    if [[ "$RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+    prompt_value "TROP release tag" "$LATEST_RELEASE" release
+    if release_is_available "$release"; then
+      RELEASE="$release"
       break
     fi
-    printf 'Enter the release tag supplied by your TROP administrator.\n'
+    printf 'Choose a complete stable release available to this token.\n'
   done
 
   prompt_value "Release directory" "${DESTINATION:-$INSTALL_ROOT/releases/$RELEASE}" DESTINATION
@@ -143,6 +154,7 @@ EOF
 
 Review
   Release:       $RELEASE
+  Current:       ${ACTIVE_RELEASE:-not installed}
   Architecture:  $architecture
   Destination:   $DESTINATION
   Configuration: $(if [[ -n "$EXISTING_CONFIG" ]]; then printf 'import %s' "$EXISTING_CONFIG"; elif is_system_destination; then printf '%s' "$SYSTEM_CONFIG_FILE"; else printf '%s/zarf-config.yaml' "$DESTINATION"; fi)
@@ -159,6 +171,36 @@ is_system_destination() {
 
 system_config_exists() {
   [[ -f "$SYSTEM_CONFIG_FILE" || -f "$SYSTEM_ENCRYPTED_CONFIG_FILE" ]]
+}
+
+active_system_release() {
+  local target
+  [[ -L "$INSTALL_ROOT/current" ]] || return 0
+  target="$(readlink -f "$INSTALL_ROOT/current" 2>/dev/null || true)"
+  case "$target" in
+    "$INSTALL_ROOT"/releases/*) basename "$target" ;;
+  esac
+}
+
+release_sequence() {
+  local release="$1"
+  [[ "$release" =~ ^r([0-9]+)-[0-9]{8}$ ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
+validate_release_transition() {
+  local current_sequence target_sequence
+  ACTIVE_RELEASE="$(active_system_release)"
+  [[ -n "$ACTIVE_RELEASE" ]] || return 0
+  is_system_destination || die "an existing system installation must be upgraded in $INSTALL_ROOT/releases/$RELEASE"
+  [[ "$RELEASE" != "$ACTIVE_RELEASE" ]] || die "release $RELEASE is already active"
+
+  current_sequence="$(release_sequence "$ACTIVE_RELEASE" || true)"
+  target_sequence="$(release_sequence "$RELEASE" || true)"
+  if [[ -n "$current_sequence" && -n "$target_sequence" ]] \
+    && (( 10#$target_sequence < 10#$current_sequence )); then
+    die "refusing downgrade from $ACTIVE_RELEASE to $RELEASE; automatic rollback is not supported"
+  fi
 }
 
 detect_installation_state() {
@@ -266,6 +308,89 @@ read_credential() {
     die "token is not scoped to the expected Harbor project"
   [[ ${#HARBOR_SECRET} -ge 16 ]] || die "Harbor robot secret is unexpectedly short"
   [[ "$HARBOR_USERNAME" != *$'\n'* && "$HARBOR_SECRET" != *$'\n'* ]] || die "invalid credential"
+}
+
+ensure_credential() {
+  [[ -n "$HARBOR_USERNAME" && -n "$HARBOR_SECRET" ]] || read_credential
+}
+
+curl_config_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\t'/\\t}"
+  value="${value//$'\r'/\\r}"
+  printf '%s' "$value"
+}
+
+registry_bearer_token() {
+  local repository="$1" response token username secret
+  username="$(curl_config_escape "$HARBOR_USERNAME")"
+  secret="$(curl_config_escape "$HARBOR_SECRET")"
+  response="$(
+    printf 'user = "%s:%s"\n' "$username" "$secret" \
+      | curl --config - --fail --silent --show-error --get \
+          --proto '=https' --tlsv1.2 \
+          --data-urlencode 'service=harbor-registry' \
+          --data-urlencode "scope=repository:${repository}:pull" \
+          "https://${REGISTRY_HOST}/service/token"
+  )" || die "TROP token was rejected while discovering releases"
+  username=""
+  secret=""
+  token="$(printf '%s' "$response" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  response=""
+  [[ -n "$token" ]] || die "Harbor did not return a registry access token"
+  printf '%s\n' "$token"
+}
+
+registry_tags() {
+  local repository="$1" token response escaped_token
+  token="$(registry_bearer_token "$repository")"
+  escaped_token="$(curl_config_escape "$token")"
+  response="$(
+    printf 'header = "Authorization: Bearer %s"\n' "$escaped_token" \
+      | curl --config - --fail --silent --show-error \
+          --proto '=https' --tlsv1.2 \
+          "https://${REGISTRY_HOST}/v2/${repository}/tags/list?n=1000"
+  )" || die "could not list releases in $repository"
+  token=""
+  escaped_token=""
+  printf '%s\n' "$response"
+}
+
+stable_tags_from_json() {
+  grep -oE '"r[0-9]+-[0-9]{8}"' | tr -d '"' | sort -Vu || true
+}
+
+discover_releases() {
+  local architecture="$1" bootstrap_tags platform_tags bootstrap_file platform_file
+  bootstrap_tags="$(registry_tags "${HARBOR_PROJECT}/${architecture}/trop-bootstrap" | stable_tags_from_json)"
+  platform_tags="$(registry_tags "${HARBOR_PROJECT}/${architecture}/trop-platform" | stable_tags_from_json)"
+  [[ -n "$bootstrap_tags" && -n "$platform_tags" ]] || die "no complete stable releases are available for $architecture"
+
+  bootstrap_file="$TEMP_DIRECTORY/bootstrap-tags"
+  platform_file="$TEMP_DIRECTORY/platform-tags"
+  printf '%s\n' "$bootstrap_tags" >"$bootstrap_file"
+  printf '%s\n' "$platform_tags" >"$platform_file"
+  AVAILABLE_RELEASES="$(
+    awk 'NR == FNR { available[$0] = 1; next } available[$0] { print }' \
+      "$bootstrap_file" "$platform_file" | LC_ALL=C sort -Vr
+  )"
+  [[ -n "$AVAILABLE_RELEASES" ]] || die "no complete stable releases are available for $architecture"
+  LATEST_RELEASE="${AVAILABLE_RELEASES%%$'\n'*}"
+}
+
+release_is_available() {
+  local requested="$1" release
+  while IFS= read -r release; do
+    [[ "$release" == "$requested" ]] && return 0
+  done <<<"$AVAILABLE_RELEASES"
+  return 1
+}
+
+print_available_releases() {
+  local limit="${1:-20}"
+  printf '%s\n' "$AVAILABLE_RELEASES" | awk -v limit="$limit" 'NR <= limit { print "  " $0 }'
 }
 
 install_zarf() {
@@ -517,6 +642,7 @@ parse_arguments() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --release) [[ $# -ge 2 ]] || die "--release requires a value"; RELEASE="$2"; shift 2 ;;
+      --list-releases) LIST_RELEASES="true"; shift ;;
       --dest) [[ $# -ge 2 ]] || die "--dest requires a value"; DESTINATION="$2"; shift 2 ;;
       --config) [[ $# -ge 2 ]] || die "--config requires a value"; EXISTING_CONFIG="$2"; shift 2 ;;
       --token-stdin) TOKEN_STDIN="true"; shift ;;
@@ -531,6 +657,7 @@ parse_arguments() {
 finalize_options() {
   [[ "$RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "--release is required and must be a valid tag"
   DESTINATION="${DESTINATION:-$INSTALL_ROOT/releases/$RELEASE}"
+  validate_release_transition
   if [[ -n "$EXISTING_CONFIG" ]]; then
     [[ -f "$EXISTING_CONFIG" && -r "$EXISTING_CONFIG" ]] || die "configuration file is not readable: $EXISTING_CONFIG"
     EXISTING_CONFIG="$(cd "$(dirname "$EXISTING_CONFIG")" && pwd)/$(basename "$EXISTING_CONFIG")"
@@ -539,27 +666,61 @@ finalize_options() {
 }
 
 main() {
-  local architecture command
+  local architecture command discovery_required="false" guided="false"
   umask 077
+  trap cleanup EXIT
   parse_arguments "$@"
-  for command in awk base64 cat cp curl dirname find install mktemp mv sha256sum; do
+  [[ "$LIST_RELEASES" != "true" || -z "$RELEASE" ]] || die "--list-releases cannot be combined with --release"
+  for command in awk base64 cat cp curl dirname find grep install mktemp mv readlink sed sha256sum sort tr; do
     require_command "$command"
   done
   architecture="$(detect_architecture)"
-  if [[ -z "$RELEASE" ]]; then
+  if [[ -z "$RELEASE" && "$LIST_RELEASES" != "true" ]]; then
     [[ -t 0 ]] || die "--release is required when standard input is not a terminal"
+    guided="true"
+    guided_intro
+  fi
+  if [[ -z "$RELEASE" || "$RELEASE" == "latest" || "$LIST_RELEASES" == "true" ]]; then
+    discovery_required="true"
+    TEMP_DIRECTORY="$(mktemp -d)"
+    ensure_credential
+    discover_releases "$architecture"
+  fi
+  if [[ "$LIST_RELEASES" == "true" ]]; then
+    printf 'Available stable TROP releases for %s:\n' "$architecture"
+    print_available_releases 20
+    clear_registry_credentials
+    return 0
+  fi
+  if [[ "$RELEASE" == "latest" ]]; then
+    RELEASE="$LATEST_RELEASE"
+    info "Resolved latest stable release to $RELEASE"
+  elif [[ "$guided" == "true" ]]; then
+    ACTIVE_RELEASE="$(active_system_release)"
+    if [[ -n "$ACTIVE_RELEASE" && "$ACTIVE_RELEASE" == "$LATEST_RELEASE" ]]; then
+      info "TROP is already running the latest stable release: $ACTIVE_RELEASE"
+      clear_registry_credentials
+      return 0
+    fi
     guided_setup "$architecture"
   fi
   finalize_options
+  if [[ -n "$ACTIVE_RELEASE" ]]; then
+    info "Upgrade: $ACTIVE_RELEASE -> $RELEASE"
+  else
+    info "Selected immutable release: $RELEASE"
+  fi
   if is_system_destination; then
     info "Checking permission to use $INSTALL_ROOT"
     run_as_root true || die "sudo authorization is required; run 'sudo -v' first"
   fi
-  TEMP_DIRECTORY="$(mktemp -d)"
+  if [[ "$discovery_required" != "true" ]]; then
+    TEMP_DIRECTORY="$(mktemp -d)"
+  fi
   prepare_staging
   install_zarf "$architecture"
   write_release_key
-  read_credential
+  ensure_credential
   registry_login
   pull_bootstrap_assets "$architecture" "$STAGING_DIRECTORY"
   pull_platform_package "$architecture" "$STAGING_DIRECTORY"
@@ -570,4 +731,6 @@ main() {
   offer_install "$architecture"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
