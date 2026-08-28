@@ -25,11 +25,3 @@ TROP is installed under `/opt/trop`, while its private configuration is stored u
 After installation, run `trop` to view status, run health checks, or manage TROP.
 
 Running the bootstrap again on a healthy system detects the active release and uses the installer update path. It reuses the root-only configuration in `/etc/trop`, rejects same-version and downgrade attempts, and advances `/opt/trop/current` only after the update health gate succeeds. This is not a data rollback mechanism.
-
-## Development checks
-
-```bash
-bash -n trop-bootstrap.sh
-shellcheck trop-bootstrap.sh test.sh
-./test.sh
-```
