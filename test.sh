@@ -38,6 +38,7 @@ PATH="$FAKE_BIN:$PATH"
 HARBOR_USERNAME="robot\$trop-releases+external-test"
 HARBOR_SECRET='secret-that-must-not-reach-argv'
 [[ "$(registry_bearer_token 'trop-releases/amd64/trop-bootstrap')" == "short-lived-bearer" ]]
+# shellcheck disable=SC2218 # exercise the sourced implementation before installing the discovery stub below
 registry_tags 'trop-releases/amd64/trop-bootstrap' >/dev/null
 if grep -q "$HARBOR_SECRET" "$CURL_ARGV_LOG"; then
   echo "ERROR: Harbor credential reached curl arguments" >&2
