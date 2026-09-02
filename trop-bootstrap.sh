@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
-readonly TROP_BOOTSTRAP_VERSION="0.4.0"
+readonly TROP_BOOTSTRAP_VERSION="0.4.1"
 # Bootstrap protocol v3 always uses this pinned client. The signed private
 # package carries the release-specific Zarf runtime used for platform pulls.
 readonly ZARF_VERSION="v0.70.1"
@@ -11,6 +11,7 @@ readonly HARBOR_PROJECT="trop-releases"
 readonly INSTALL_ROOT="/opt/trop"
 readonly SYSTEM_CONFIG_FILE="/etc/trop/zarf-config.yaml"
 readonly SYSTEM_ENCRYPTED_CONFIG_FILE="/etc/trop/zarf-config.enc.yaml"
+readonly BOOTSTRAP_LATEST_URL="https://github.com/defencebay/trop-bootstrap/releases/latest"
 
 RELEASE=""
 DESTINATION=""
@@ -64,7 +65,7 @@ Run without arguments in a terminal to open the guided installer.
 Options:
   --release RELEASE  Immutable release tag, or 'latest'
   --list-releases    List stable releases available to this token and exit
-  --dest DIRECTORY   Release directory (default: /opt/trop/releases/RELEASE)
+  --dest DIRECTORY   Verified release-assets directory (default: /opt/trop/releases/RELEASE)
   --config FILE      Import plaintext config from an earlier home-directory install
   --token-stdin      Read the TROP token from standard input
   --fetch-only       Retrieve and verify everything without running the installer
@@ -73,6 +74,12 @@ Options:
 
 The token is accepted only through a hidden prompt or standard input. It is
 never accepted as a command argument or environment variable.
+
+The destination stores the downloaded installer, Zarf runtime, signed package,
+and (for a custom destination) its config file. It is not the Kubernetes data
+directory. The recommended /opt/trop/releases/RELEASE destination participates
+in the managed /opt/trop/current system layout; a custom destination is an
+operator-owned download/checkpoint directory.
 EOF
 }
 
@@ -97,6 +104,47 @@ confirm_default_yes() {
       *) printf 'Please enter y or n.\n' ;;
     esac
   done
+}
+
+version_is_newer() {
+  local candidate="${1#v}" current="${2#v}"
+  local candidate_major candidate_minor candidate_patch
+  local current_major current_minor current_patch
+  [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS=. read -r candidate_major candidate_minor candidate_patch <<<"$candidate"
+  IFS=. read -r current_major current_minor current_patch <<<"$current"
+  (( 10#$candidate_major > 10#$current_major )) && return 0
+  (( 10#$candidate_major < 10#$current_major )) && return 1
+  (( 10#$candidate_minor > 10#$current_minor )) && return 0
+  (( 10#$candidate_minor < 10#$current_minor )) && return 1
+  (( 10#$candidate_patch > 10#$current_patch ))
+}
+
+check_for_bootstrap_update() {
+  local resolved_url latest_tag
+  resolved_url="$(curl --proto '=https' --tlsv1.2 --fail --silent --location \
+    --head --output /dev/null --write-out '%{url_effective}' \
+    "$BOOTSTRAP_LATEST_URL" 2>/dev/null || true)"
+  latest_tag="${resolved_url##*/}"
+  if ! version_is_newer "$latest_tag" "$TROP_BOOTSTRAP_VERSION"; then
+    return 0
+  fi
+
+  cat <<EOF
+Update available for this launcher: v$TROP_BOOTSTRAP_VERSION -> $latest_tag
+It is recommended to restart with the current public launcher before downloading
+a private TROP release:
+
+  curl --proto '=https' --tlsv1.2 -fL \
+    https://github.com/defencebay/trop-bootstrap/releases/latest/download/trop-bootstrap \
+    -o trop-bootstrap.new
+  chmod +x trop-bootstrap.new
+  ./trop-bootstrap.new
+
+Continuing now still uses the immutable, signed release selected below.
+
+EOF
 }
 
 guided_intro() {
@@ -127,7 +175,13 @@ guided_setup() {
     printf 'Choose a complete stable release available to this token.\n'
   done
 
-  prompt_value "Release directory" "${DESTINATION:-$INSTALL_ROOT/releases/$RELEASE}" DESTINATION
+  cat <<EOF
+Release assets are stored in a versioned directory. The recommended path is
+managed under $INSTALL_ROOT and becomes the active release only after a healthy
+deploy. Choosing another path changes where verified artifacts (and its local
+config) are kept; it does not change where k3s stores cluster data.
+EOF
+  prompt_value "Verified release-assets directory" "${DESTINATION:-$INSTALL_ROOT/releases/$RELEASE}" DESTINATION
 
   if [[ "$FETCH_ONLY" == "true" ]]; then
     INSTALL_AFTER_FETCH="false"
@@ -156,7 +210,7 @@ Review
   Release:       $RELEASE
   Current:       ${ACTIVE_RELEASE:-not installed}
   Architecture:  $architecture
-  Destination:   $DESTINATION
+  Release assets: $DESTINATION
   Configuration: $(if [[ -n "$EXISTING_CONFIG" ]]; then printf 'import %s' "$EXISTING_CONFIG"; elif is_system_destination; then printf '%s' "$SYSTEM_CONFIG_FILE"; else printf '%s/zarf-config.yaml' "$DESTINATION"; fi)
   Action:        $(if [[ "$INSTALL_AFTER_FETCH" == "true" ]]; then printf 'download and install'; else printf 'download only'; fi)
 
@@ -679,6 +733,7 @@ main() {
     [[ -t 0 ]] || die "--release is required when standard input is not a terminal"
     guided="true"
     guided_intro
+    check_for_bootstrap_update
   fi
   if [[ -z "$RELEASE" || "$RELEASE" == "latest" || "$LIST_RELEASES" == "true" ]]; then
     discovery_required="true"
