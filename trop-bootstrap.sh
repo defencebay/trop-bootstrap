@@ -82,6 +82,12 @@ The active bundle supplies management and safe-uninstall tools and must remain
 intact. With the recommended /opt/trop/releases/RELEASE destination, configuration
 and secrets live separately under /etc/trop. A custom destination is an
 operator-owned download/checkpoint directory and keeps its config locally.
+
+Before deploy, the guided installer records explicit true/false consent for
+/etc/hosts management, system CA trust, and global /usr/local operator tools.
+False—or a missing flag in an imported legacy config—means no change to that
+host integration. Required k3s/Zarf and TROP workload effects are shown
+separately before deployment.
 EOF
 }
 
@@ -158,6 +164,19 @@ This wizard downloads a signed TROP release and can install it on this computer.
 Press Enter to accept a recommended value. No token or password is shown in the
 review screen or written to shell history.
 
+Before deployment, the release installer asks for explicit true/false consent
+for each optional host integration:
+  - maintaining a marked TROP block in /etc/hosts;
+  - adding the TROP CA to the system certificate trust store;
+  - installing or replacing TROP-owned global trop, trop-doctor, and trop-install
+    commands under /usr/local (plus runtime files and obsolete-link cleanup).
+
+Choosing false leaves that integration unchanged. The installer shows all three
+stored flags again before deployment. The required installation itself creates
+or updates TROP workloads and persistent data, and initializes bundled k3s/Zarf
+when a ready installation is not already present. No deployment starts until the
+release is verified and the reviews are accepted.
+
 EOF
 }
 
@@ -231,6 +250,8 @@ Review
   Action:        $(if [[ "$INSTALL_AFTER_FETCH" == "true" ]]; then printf 'download and install'; else printf 'download only'; fi)
 
 The release and its signatures will be verified before any installation starts.
+If installation is selected, the next setup wizard asks separately for explicit
+true/false consent to /etc/hosts, system CA trust, and global operator commands.
 EOF
   confirm_default_yes "Continue?" || { info "No changes were made"; exit 0; }
 }

@@ -18,6 +18,24 @@ chmod +x trop-bootstrap
 
 Follow the prompts and accept the recommended options unless instructed otherwise. Paste the token when requested. The installer lists complete stable releases available to that token and recommends the latest one. The token is hidden and must not be added to the command line.
 
+Before deployment, the guided installer asks separately for explicit `true` or
+`false` consent for every optional integration with the Ubuntu host:
+
+- `MANAGE_LOCAL_HOSTS` controls only the marked TROP block in `/etc/hosts`;
+- `INSTALL_HOST_CA` controls installation of the TROP CA in the system trust
+  store;
+- `INSTALL_OPERATOR_TOOLS` controls `/usr/local/bin/trop`,
+  `/usr/local/bin/trop-doctor`, `/usr/local/bin/trop-install`,
+  `/usr/local/lib/trop-doctor`, and `/etc/trop/doctor.conf`.
+
+Choosing `false` means deploy, update, and normal uninstall do not create,
+replace, or remove that integration. Missing flags in an older imported config
+are treated as `false`; there is no implicit opt-in. The installer prints the
+effective flags before deployment. Required deploy effects are shown separately:
+TROP workloads and persistent application data are installed or updated, and
+the bundled k3s/Zarf stack is initialized only when no ready installation exists.
+The managed `/opt/trop/current` pointer changes only after health validation.
+
 At the start of the interactive wizard, the launcher also checks whether a newer
 public `trop-bootstrap` version is available. A failed network check never blocks
 installation. When an update exists, it prints a safe command that downloads the
