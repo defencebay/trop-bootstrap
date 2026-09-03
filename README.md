@@ -29,11 +29,18 @@ For automation, resolve the newest stable release with `--release latest --token
 With the recommended destination, verified immutable release assets are stored
 under `/opt/trop/releases/<release>`, `/opt/trop/current` points to the last
 healthy deployed release, and private configuration is stored under `/etc/trop`.
-This destination is an artifact/release directory, not the k3s workload-data
-directory. A custom `--dest` is an operator-owned download/checkpoint directory;
-it keeps the assets and local config there and does not participate in the
-managed `/opt/trop/current` layout. The installer prints the local DNS records
-required by other devices and does not reboot the computer.
+Each release directory is a persistent, complete bundle containing the installer,
+Zarf tools, signed application package, and checksums. It is not a temporary
+download directory and does not contain k3s workload data. The active bundle
+supplies management and safe-uninstall tools and must remain intact.
+
+An upgrade creates a new versioned directory and changes `/opt/trop/current` only
+after its health check succeeds. Older release directories are retained; the
+current launcher does not remove them automatically. A custom `--dest` is an
+operator-owned download/checkpoint directory; it keeps the assets and local
+config there and does not participate in the managed `/opt/trop/current` layout.
+The installer prints the local DNS records required by other devices and does
+not reboot the computer.
 
 After installation, run `trop` to view status, run health checks, or manage TROP.
 

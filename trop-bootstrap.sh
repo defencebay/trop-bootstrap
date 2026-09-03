@@ -75,11 +75,13 @@ Options:
 The token is accepted only through a hidden prompt or standard input. It is
 never accepted as a command argument or environment variable.
 
-The destination stores the downloaded installer, Zarf runtime, signed package,
-and (for a custom destination) its config file. It is not the Kubernetes data
-directory. The recommended /opt/trop/releases/RELEASE destination participates
-in the managed /opt/trop/current system layout; a custom destination is an
-operator-owned download/checkpoint directory.
+The destination stores one complete, verified release bundle: the installer,
+Zarf tools, signed application package, and checksums. It is persistent release
+storage, not a temporary download folder and not the Kubernetes data directory.
+The active bundle supplies management and safe-uninstall tools and must remain
+intact. With the recommended /opt/trop/releases/RELEASE destination, configuration
+and secrets live separately under /etc/trop. A custom destination is an
+operator-owned download/checkpoint directory and keeps its config locally.
 EOF
 }
 
@@ -176,10 +178,24 @@ guided_setup() {
   done
 
   cat <<EOF
-Release assets are stored in a versioned directory. The recommended path is
-managed under $INSTALL_ROOT and becomes the active release only after a healthy
-deploy. Choosing another path changes where verified artifacts (and its local
-config) are kept; it does not change where k3s stores cluster data.
+=== Where TROP files are stored ===
+
+Recommended system layout:
+  Release bundle:     $INSTALL_ROOT/releases/$RELEASE
+  Configuration:      /etc/trop
+  Application data:   managed separately by k3s
+
+The release bundle contains the installer, management tools, signed application
+package, and checksums. It stays on disk after installation; it is not a temporary
+download folder. After a healthy deploy it becomes the active bundle, so do not
+delete it or individual files inside it.
+
+An upgrade creates a new release directory and changes $INSTALL_ROOT/current only
+after the upgrade passes its health check. Older release directories are retained
+and are not currently removed automatically.
+
+Choosing another path creates an operator-owned download/checkpoint directory
+with its configuration kept locally.
 EOF
   prompt_value "Verified release-assets directory" "${DESTINATION:-$INSTALL_ROOT/releases/$RELEASE}" DESTINATION
 
