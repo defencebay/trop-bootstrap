@@ -66,6 +66,8 @@ config there and does not participate in the managed `/opt/trop/current` layout.
 The installer prints the local DNS records required by other devices and does
 not reboot the computer.
 
-After installation, run `trop` to view status, run health checks, or manage TROP.
+After installation, run `trop-doctor` (or the short alias `trop`) without
+arguments to open the operator menu. Explicit commands such as
+`trop-doctor health` remain available for scripts and on-demand checks.
 
 Running the bootstrap again on a healthy system detects the active release and uses the installer update path. It reuses the root-only configuration in `/etc/trop`, rejects same-version and downgrade attempts, and advances `/opt/trop/current` only after the update health gate succeeds. This is not a data rollback mechanism.
