@@ -28,6 +28,12 @@ Before deployment, the guided installer asks separately for explicit `true` or
   `/usr/local/bin/trop-doctor`, `/usr/local/bin/trop-install`,
   `/usr/local/lib/trop-doctor`, and `/etc/trop/doctor.conf`.
 
+Setup lists all detected global IPv4 addresses with their interface names and
+labels the address used by the default route. The operator can select a listed
+client-facing LAN or type another IPv4 address already configured on the host.
+This prevents a management interface from being selected silently on a
+multi-network server.
+
 Choosing `false` means deploy, update, and normal uninstall do not create,
 replace, or remove that integration. Missing flags in an older imported config
 are treated as `false`; there is no implicit opt-in. The installer prints the

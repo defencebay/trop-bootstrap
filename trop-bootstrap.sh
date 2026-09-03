@@ -171,6 +171,10 @@ for each optional host integration:
   - installing or replacing TROP-owned global trop, trop-doctor, and trop-install
     commands under /usr/local (plus runtime files and obsolete-link cleanup).
 
+When several IPv4 interfaces exist, setup lists their addresses and interface
+names. You choose the client-facing LAN or type another configured address;
+the default-route management address is never silently accepted for you.
+
 Choosing false leaves that integration unchanged. The installer shows all three
 stored flags again before deployment. The required installation itself creates
 or updates TROP workloads and persistent data, and initializes bundled k3s/Zarf
