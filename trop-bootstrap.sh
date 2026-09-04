@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
-readonly TROP_BOOTSTRAP_VERSION="0.4.0"
+readonly TROP_BOOTSTRAP_VERSION="0.4.1"
 # Bootstrap protocol v3 always uses this pinned client. The signed private
 # package carries the release-specific Zarf runtime used for platform pulls.
 readonly ZARF_VERSION="v0.70.1"
@@ -11,6 +11,7 @@ readonly HARBOR_PROJECT="trop-releases"
 readonly INSTALL_ROOT="/opt/trop"
 readonly SYSTEM_CONFIG_FILE="/etc/trop/zarf-config.yaml"
 readonly SYSTEM_ENCRYPTED_CONFIG_FILE="/etc/trop/zarf-config.enc.yaml"
+readonly BOOTSTRAP_LATEST_URL="https://github.com/defencebay/trop-bootstrap/releases/latest"
 
 RELEASE=""
 DESTINATION=""
@@ -64,7 +65,7 @@ Run without arguments in a terminal to open the guided installer.
 Options:
   --release RELEASE  Immutable release tag, or 'latest'
   --list-releases    List stable releases available to this token and exit
-  --dest DIRECTORY   Release directory (default: /opt/trop/releases/RELEASE)
+  --dest DIRECTORY   Verified release-assets directory (default: /opt/trop/releases/RELEASE)
   --config FILE      Import plaintext config from an earlier home-directory install
   --token-stdin      Read the TROP token from standard input
   --fetch-only       Retrieve and verify everything without running the installer
@@ -73,6 +74,20 @@ Options:
 
 The token is accepted only through a hidden prompt or standard input. It is
 never accepted as a command argument or environment variable.
+
+The destination stores one complete, verified release bundle: the installer,
+Zarf tools, signed application package, and checksums. It is persistent release
+storage, not a temporary download folder and not the Kubernetes data directory.
+The active bundle supplies management and safe-uninstall tools and must remain
+intact. With the recommended /opt/trop/releases/RELEASE destination, configuration
+and secrets live separately under /etc/trop. A custom destination is an
+operator-owned download/checkpoint directory and keeps its config locally.
+
+Before deploy, the guided installer records explicit true/false consent for
+/etc/hosts management, system CA trust, and global /usr/local operator tools.
+False—or a missing flag in an imported legacy config—means no change to that
+host integration. Required k3s/Zarf and TROP workload effects are shown
+separately before deployment.
 EOF
 }
 
@@ -99,6 +114,47 @@ confirm_default_yes() {
   done
 }
 
+version_is_newer() {
+  local candidate="${1#v}" current="${2#v}"
+  local candidate_major candidate_minor candidate_patch
+  local current_major current_minor current_patch
+  [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS=. read -r candidate_major candidate_minor candidate_patch <<<"$candidate"
+  IFS=. read -r current_major current_minor current_patch <<<"$current"
+  (( 10#$candidate_major > 10#$current_major )) && return 0
+  (( 10#$candidate_major < 10#$current_major )) && return 1
+  (( 10#$candidate_minor > 10#$current_minor )) && return 0
+  (( 10#$candidate_minor < 10#$current_minor )) && return 1
+  (( 10#$candidate_patch > 10#$current_patch ))
+}
+
+check_for_bootstrap_update() {
+  local resolved_url latest_tag
+  resolved_url="$(curl --proto '=https' --tlsv1.2 --fail --silent --location \
+    --head --output /dev/null --write-out '%{url_effective}' \
+    "$BOOTSTRAP_LATEST_URL" 2>/dev/null || true)"
+  latest_tag="${resolved_url##*/}"
+  if ! version_is_newer "$latest_tag" "$TROP_BOOTSTRAP_VERSION"; then
+    return 0
+  fi
+
+  cat <<EOF
+Update available for this launcher: v$TROP_BOOTSTRAP_VERSION -> $latest_tag
+It is recommended to restart with the current public launcher before downloading
+a private TROP release:
+
+  curl --proto '=https' --tlsv1.2 -fL \
+    https://github.com/defencebay/trop-bootstrap/releases/latest/download/trop-bootstrap \
+    -o trop-bootstrap.new
+  chmod +x trop-bootstrap.new
+  ./trop-bootstrap.new
+
+Continuing now still uses the immutable, signed release selected below.
+
+EOF
+}
+
 guided_intro() {
   cat <<'EOF'
 
@@ -107,6 +163,23 @@ guided_intro() {
 This wizard downloads a signed TROP release and can install it on this computer.
 Press Enter to accept a recommended value. No token or password is shown in the
 review screen or written to shell history.
+
+Before deployment, the release installer asks for explicit true/false consent
+for each optional host integration:
+  - maintaining a marked TROP block in /etc/hosts;
+  - adding the TROP CA to the system certificate trust store;
+  - installing or replacing TROP-owned global trop, trop-doctor, and trop-install
+    commands under /usr/local (plus runtime files and obsolete-link cleanup).
+
+When several IPv4 interfaces exist, setup lists their addresses and interface
+names. You choose the client-facing LAN or type another configured address;
+the default-route management address is never silently accepted for you.
+
+Choosing false leaves that integration unchanged. The installer shows all three
+stored flags again before deployment. The required installation itself creates
+or updates TROP workloads and persistent data, and initializes bundled k3s/Zarf
+when a ready installation is not already present. No deployment starts until the
+release is verified and the reviews are accepted.
 
 EOF
 }
@@ -127,7 +200,27 @@ guided_setup() {
     printf 'Choose a complete stable release available to this token.\n'
   done
 
-  prompt_value "Release directory" "${DESTINATION:-$INSTALL_ROOT/releases/$RELEASE}" DESTINATION
+  cat <<EOF
+=== Where TROP files are stored ===
+
+Recommended system layout:
+  Release bundle:     $INSTALL_ROOT/releases/$RELEASE
+  Configuration:      /etc/trop
+  Application data:   managed separately by k3s
+
+The release bundle contains the installer, management tools, signed application
+package, and checksums. It stays on disk after installation; it is not a temporary
+download folder. After a healthy deploy it becomes the active bundle, so do not
+delete it or individual files inside it.
+
+An upgrade creates a new release directory and changes $INSTALL_ROOT/current only
+after the upgrade passes its health check. Older release directories are retained
+and are not currently removed automatically.
+
+Choosing another path creates an operator-owned download/checkpoint directory
+with its configuration kept locally.
+EOF
+  prompt_value "Verified release-assets directory" "${DESTINATION:-$INSTALL_ROOT/releases/$RELEASE}" DESTINATION
 
   if [[ "$FETCH_ONLY" == "true" ]]; then
     INSTALL_AFTER_FETCH="false"
@@ -156,11 +249,13 @@ Review
   Release:       $RELEASE
   Current:       ${ACTIVE_RELEASE:-not installed}
   Architecture:  $architecture
-  Destination:   $DESTINATION
+  Release assets: $DESTINATION
   Configuration: $(if [[ -n "$EXISTING_CONFIG" ]]; then printf 'import %s' "$EXISTING_CONFIG"; elif is_system_destination; then printf '%s' "$SYSTEM_CONFIG_FILE"; else printf '%s/zarf-config.yaml' "$DESTINATION"; fi)
   Action:        $(if [[ "$INSTALL_AFTER_FETCH" == "true" ]]; then printf 'download and install'; else printf 'download only'; fi)
 
 The release and its signatures will be verified before any installation starts.
+If installation is selected, the next setup wizard asks separately for explicit
+true/false consent to /etc/hosts, system CA trust, and global operator commands.
 EOF
   confirm_default_yes "Continue?" || { info "No changes were made"; exit 0; }
 }
@@ -679,6 +774,7 @@ main() {
     [[ -t 0 ]] || die "--release is required when standard input is not a terminal"
     guided="true"
     guided_intro
+    check_for_bootstrap_update
   fi
   if [[ -z "$RELEASE" || "$RELEASE" == "latest" || "$LIST_RELEASES" == "true" ]]; then
     discovery_required="true"
