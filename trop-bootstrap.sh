@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
-readonly TROP_BOOTSTRAP_VERSION="0.4.1"
+readonly TROP_BOOTSTRAP_VERSION="0.4.2"
 # Bootstrap protocol v3 always uses this pinned client. The signed private
 # package carries the release-specific Zarf runtime used for platform pulls.
 readonly ZARF_VERSION="v0.70.1"
@@ -78,6 +78,9 @@ never accepted as a command argument or environment variable.
 The destination stores one complete, verified release bundle: the installer,
 Zarf tools, signed application package, and checksums. It is persistent release
 storage, not a temporary download folder and not the Kubernetes data directory.
+Retrying a release automatically verifies and reuses a complete signed bundle
+already at the selected destination. Older bundles without retained signature
+proof must be fetched to a new destination before they can be reused.
 The active bundle supplies management and safe-uninstall tools and must remain
 intact. With the recommended /opt/trop/releases/RELEASE destination, configuration
 and secrets live separately under /etc/trop. A custom destination is an
@@ -547,6 +550,16 @@ verify_bootstrap_assets() {
   chmod +x "$directory/trop-install.sh" "${zarf_files[0]}"
 }
 
+verify_package_identity() {
+  local package="$1" expected_name="$2" expected_architecture="$3" definition identity
+  definition="$("$ZARF_BIN" package inspect definition "$package" \
+    --key "$TEMP_DIRECTORY/trop-release.pub" --verify --no-color)" || die "signed package verification failed: $package"
+  identity="$(printf '%s\n' "$definition" | "$ZARF_BIN" tools yq -r \
+    '[.metadata.name, .metadata.version, .metadata.architecture] | join("|")' -)"
+  [[ "$identity" == "$expected_name|$RELEASE|$expected_architecture" ]] ||
+    die "signed package identity mismatch for $(basename "$package"): expected $expected_name/$RELEASE/$expected_architecture, got $identity"
+}
+
 prepare_staging() {
   local destination_parent
   destination_parent="$(dirname "$DESTINATION")"
@@ -571,14 +584,26 @@ registry_login() {
 }
 
 pull_bootstrap_assets() {
-  local architecture="$1" destination="$2" output staging reference
+  local architecture="$1" destination="$2" output staging reference package_dir package
   output="$TEMP_DIRECTORY/extracted"
   staging="$output/trop-bootstrap-documentation"
   reference="oci://${REGISTRY_HOST}/${HARBOR_PROJECT}/${architecture}/trop-bootstrap:${RELEASE}"
-  mkdir "$output"
+  package_dir="$TEMP_DIRECTORY/bootstrap-package"
+  mkdir "$output" "$package_dir"
 
   info "Downloading private installer assets for ${RELEASE} (${architecture})"
-  DOCKER_CONFIG="$REGISTRY_AUTH_DIRECTORY" "$ZARF_BIN" package inspect documentation "$reference" \
+  DOCKER_CONFIG="$REGISTRY_AUTH_DIRECTORY" "$ZARF_BIN" package pull "$reference" \
+    --architecture skeleton \
+    --key "$TEMP_DIRECTORY/trop-release.pub" \
+    --verify \
+    --output-directory "$package_dir"
+  shopt -s nullglob
+  local packages=("$package_dir"/zarf-package-trop-bootstrap-skeleton-"$RELEASE".tar.zst)
+  shopt -u nullglob
+  [[ ${#packages[@]} -eq 1 ]] || die "expected exactly one signed bootstrap package"
+  package="${packages[0]}"
+  verify_package_identity "$package" trop-bootstrap skeleton
+  "$ZARF_BIN" package inspect documentation "$package" \
     --architecture skeleton \
     --key "$TEMP_DIRECTORY/trop-release.pub" \
     --verify \
@@ -586,7 +611,49 @@ pull_bootstrap_assets() {
   [[ -d "$staging" ]] || die "Zarf did not extract the private installer assets"
   verify_bootstrap_assets "$staging" "$architecture"
   mv "$staging" "$destination"
+  cp "$package" "$destination/"
   info "Verified private installer assets"
+}
+
+verify_cached_destination() {
+  local architecture="$1" package output extracted name platform
+  [[ -d "$DESTINATION" && ! -L "$DESTINATION" ]] || die "cached release destination is not a regular directory: $DESTINATION"
+  shopt -s nullglob
+  local packages=("$DESTINATION"/zarf-package-trop-bootstrap-skeleton-"$RELEASE".tar.zst)
+  shopt -u nullglob
+  if [[ ${#packages[@]} -ne 1 ]]; then
+    if is_system_destination; then
+      die "cached release lacks its signed bootstrap package; do not execute its installer. Move the unverified pending directory aside, then fetch $RELEASE again into $INSTALL_ROOT/releases/$RELEASE. Do not move the active release."
+    fi
+    die "cached release lacks its signed bootstrap package; do not execute its installer. Fetch this release into a new destination."
+  fi
+  package="${packages[0]}"
+  verify_package_identity "$package" trop-bootstrap skeleton
+  output="$TEMP_DIRECTORY/cached-documentation"
+  mkdir "$output"
+  "$ZARF_BIN" package inspect documentation "$package" \
+    --architecture skeleton \
+    --key "$TEMP_DIRECTORY/trop-release.pub" \
+    --verify --output "$output" >/dev/null
+  extracted="$output/trop-bootstrap-documentation"
+  [[ -d "$extracted" ]] || die "signed cached bootstrap package has no documentation"
+  verify_bootstrap_assets "$extracted" "$architecture"
+  for name in trop-install.sh trop-release.pub trop-standalone-tools.tar.gz trop-layout-contract SHA256SUMS-common "SHA256SUMS-$architecture"; do
+    [[ -f "$DESTINATION/$name" && ! -L "$DESTINATION/$name" ]] || die "cached release asset is missing or invalid: $name"
+    cmp -s "$extracted/$name" "$DESTINATION/$name" || die "cached release asset differs from signed package: $name"
+  done
+  shopt -s nullglob
+  local zarf_files=("$extracted"/zarf_*_Linux_"$architecture")
+  local init_files=("$extracted"/zarf-init-"$architecture"-*.tar.zst)
+  shopt -u nullglob
+  for name in "${zarf_files[@]}" "${init_files[@]}"; do
+    [[ -f "$DESTINATION/$(basename "$name")" && ! -L "$DESTINATION/$(basename "$name")" ]] || die "cached release asset is missing or invalid: $(basename "$name")"
+    cmp -s "$name" "$DESTINATION/$(basename "$name")" || die "cached release asset differs from signed package: $(basename "$name")"
+  done
+  platform="$DESTINATION/zarf-package-trop-platform-${architecture}-${RELEASE}.tar.zst"
+  [[ -f "$platform" && ! -L "$platform" ]] || die "cached platform package is missing or invalid: $platform"
+  verify_package_identity "$platform" trop-platform "$architecture"
+  info "Verified complete cached release at $DESTINATION"
 }
 
 pull_platform_package() {
@@ -601,6 +668,7 @@ pull_platform_package() {
     --key "$destination/trop-release.pub" \
     --verify
   [[ -f "$destination/$package_name" ]] || die "Zarf pull did not create $package_name"
+  verify_package_identity "$destination/$package_name" trop-platform "$architecture"
 }
 
 publish_destination() {
@@ -750,14 +818,19 @@ parse_arguments() {
 }
 
 finalize_options() {
+  local destination_parent
   [[ "$RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "--release is required and must be a valid tag"
   DESTINATION="${DESTINATION:-$INSTALL_ROOT/releases/$RELEASE}"
+  if ! is_system_destination && [[ -d "$DESTINATION" ]]; then
+    destination_parent="$(cd "$(dirname "$DESTINATION")" && pwd -P)"
+    DESTINATION="$destination_parent/$(basename "$DESTINATION")"
+  fi
   validate_release_transition
   if [[ -n "$EXISTING_CONFIG" ]]; then
     [[ -f "$EXISTING_CONFIG" && -r "$EXISTING_CONFIG" ]] || die "configuration file is not readable: $EXISTING_CONFIG"
     EXISTING_CONFIG="$(cd "$(dirname "$EXISTING_CONFIG")" && pwd)/$(basename "$EXISTING_CONFIG")"
   fi
-  [[ ! -e "$DESTINATION" && ! -L "$DESTINATION" ]] || die "destination already exists: $DESTINATION"
+  [[ ! -L "$DESTINATION" ]] || die "destination is a symbolic link: $DESTINATION"
 }
 
 main() {
@@ -766,7 +839,7 @@ main() {
   trap cleanup EXIT
   parse_arguments "$@"
   [[ "$LIST_RELEASES" != "true" || -z "$RELEASE" ]] || die "--list-releases cannot be combined with --release"
-  for command in awk base64 cat cp curl dirname find grep install mktemp mv readlink sed sha256sum sort tr; do
+  for command in awk base64 cat cmp cp curl dirname find grep install mktemp mv readlink sed sha256sum sort tr; do
     require_command "$command"
   done
   architecture="$(detect_architecture)"
@@ -813,9 +886,15 @@ main() {
   if [[ "$discovery_required" != "true" ]]; then
     TEMP_DIRECTORY="$(mktemp -d)"
   fi
-  prepare_staging
   install_zarf "$architecture"
   write_release_key
+  if [[ -e "$DESTINATION" ]]; then
+    verify_cached_destination "$architecture"
+    clear_registry_credentials
+    offer_install "$architecture"
+    return
+  fi
+  prepare_staging
   ensure_credential
   registry_login
   pull_bootstrap_assets "$architecture" "$STAGING_DIRECTORY"
