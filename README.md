@@ -31,8 +31,8 @@ destination in the wizard:
 | `/etc/trop/zarf-config.yaml` or `zarf-config.enc.yaml` | Private deployment configuration, outside release directories |
 | `/usr/local/bin/trop`, `trop-doctor`, `trop-install` | Optional global operator commands |
 
-For example, installing `r65-20260918` while your shell is in
-`~/trop-bootstrap` creates `/opt/trop/releases/r65-20260918`, not a TROP
+For example, installing `r70-20260924` while your shell is in
+`~/trop-bootstrap` creates `/opt/trop/releases/r70-20260924`, not a TROP
 installation under your home directory. An upgrade adds a new release
 directory, keeps the old one, and changes `current` only after health
 validation. Workload data is separate from these release directories.
@@ -111,8 +111,21 @@ by the launcher on another architecture. On an already installed host, reuse
 
 ## Upgrade an installed host
 
+Before an upgrade, check that the managed installation is healthy and keep a
+host/data backup according to your site's policy. Back up the private config
+to a root-only directory:
+
+```bash
+readlink -f /opt/trop/current
+trop health
+sudo install -d -m 0700 /root/trop-backups
+sudo cp -a /etc/trop /root/trop-backups/etc-trop-before-upgrade
+```
+
 For a guided connected upgrade, run `trop upgrade` or select **Upgrade TROP**
-from the `trop` menu. With a compatible operator tool, select an exact release:
+from the `trop` menu. With a compatible operator tool, select an exact release.
+For example, to install `r70-20260924` on a healthy managed host running an
+older release:
 
 ```bash
 trop upgrade --release r70-20260924
@@ -120,12 +133,32 @@ readlink -f /opt/trop/current
 trop health
 ```
 
-If the installed `trop` predates the `--release` option, download the current
-public launcher and use `./trop-bootstrap --release r70-20260924` instead.
-It detects the active managed release, reuses `/etc/trop`, runs the target
-release's update path, and never reruns setup or regenerates deployment secrets.
-See the [worked r65 → r70 upgrade](docs/r65-to-r70.md) for prechecks, exact
-commands, validation, and the legacy-layout boundary.
+Replace the example tag with the newer release you intend to install. If the
+installed `trop` predates the `--release` option, download the current public
+launcher using the first-install commands above and run
+`./trop-bootstrap --release r70-20260924` (or your chosen tag) instead. It
+detects the active managed release, reuses `/etc/trop`, runs the target
+release's update path, and does not rerun setup or regenerate deployment
+secrets. Keep the recommended `/opt/trop/releases/<release>` destination; do
+not pass `--dest` for a managed upgrade. A healthy installation already using
+`/opt/trop/current` and `/etc/trop` needs no directory or config-format
+migration. If `current` is missing, points outside `/opt/trop/releases`, or
+the host is degraded, investigate that state before upgrading.
+
+Afterward, verify the new release and host health:
+
+```bash
+readlink -f /opt/trop/current
+trop status
+trop health
+trop-doctor install-validate
+sudo cat /opt/trop/operation-state
+```
+
+`install-validate` prompts for administrator credentials. On newer releases,
+the operation state should end in `status=succeeded`. Check the URLs enabled
+by this host's profile from a client that uses the site's DNS. A local health
+check alone cannot prove client DNS and ingress work.
 
 To apply a later edit to the *active* release's configuration:
 
