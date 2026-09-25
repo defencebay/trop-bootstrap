@@ -2,6 +2,8 @@
 
 Run these commands **on the Ubuntu computer that will run TROP**. You need `curl`, `sudo`, internet access for the connected path, and a TROP token from DefenceBay. These GIFs show **illustrative terminal sessions**, not a live deployment. Copy commands from the code blocks.
 
+Before starting, choose **Server only**, **Platform**, or **Platform + TOC** and check the [host and component sizing examples](docs/requirements.md). The release download contains all packaged components even when the selected profile deploys only some of them.
+
 ## 1. Install and set up a new host
 
 ![Illustrative installation and setup terminal session](docs/media/install.gif)
@@ -31,7 +33,21 @@ TROP Server hostname: trop.example.com
 LAN address for TROP: 192.168.20.10 # client-facing interface
 ```
 
-The setup wizard then asks for the administrator password at a hidden prompt, how this host resolves TROP names, and separate consent for the host CA and global operator commands. Review its plan before deploying. Enable **operator tools** to use the commands below. Other LAN devices still need DNS or hosts records for the TROP names; this host's `/etc/hosts` choice does not configure them.
+The setup wizard then asks for the administrator password at a hidden prompt, how this host resolves TROP names, and separate consent for the host CA and global operator commands. Review its plan before deploying. Answer **yes** to "Install global TROP operator tools on this server?" (`INSTALL_OPERATOR_TOOLS=true`) to use the `trop` commands below. Other LAN devices still need DNS or hosts records for the TROP names; this host's `/etc/hosts` choice does not configure them.
+
+**What exists at each checkpoint with the recommended managed destination:**
+
+| Checkpoint | Available files and commands |
+| --- | --- |
+| Before installation | Only the downloaded `./trop-bootstrap` launcher; `trop` is not a prerequisite. |
+| After signed download, including `--fetch-only` | The verified bundle and its release-local `trop-install.sh` in `/opt/trop/releases/<release>` (or your custom `--dest`). No global `trop` is installed by download alone. |
+| After setup | Root-only `/etc/trop/zarf-config.yaml` or its encrypted form. Setup writes configuration; it does not deploy workloads or make `trop` available. |
+| During deploy/update, if operator tools were enabled | The installer places `trop` and `trop-doctor` under `/usr/local/bin` after workload readiness. Their presence alone does not prove the final health gate passed. |
+| After a successful health gate | `/opt/trop/current` points at the active release. If operator tools were enabled, `/usr/local/bin/trop-install` points to that release's installer. Now use `trop` for normal operations. |
+
+If `INSTALL_OPERATOR_TOOLS=false`, the installer does not create or change these global commands. Use the release-local tools and the resume instructions instead; a command left by an older installation is not proof that this deployment enabled it.
+
+On an already installed host, check `trop --help` and `trop-doctor version` before using a newer command. Older doctor builds have the guided `trop upgrade` but may lack `--release` and `trop config apply`; the signed r70 package includes doctor 0.4.5 with both. The public `./trop-bootstrap` remains the entry point when the installed helper is too old.
 
 Check the result:
 
