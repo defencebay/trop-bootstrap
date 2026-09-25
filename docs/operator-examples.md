@@ -1,99 +1,73 @@
-# Operator examples: setup and custom paths
+# Advanced operator recipes
 
-All commands here run **on the Ubuntu TROP host**. The public
-`trop-bootstrap` launcher may be downloaded into any working directory.
-Its recommended managed destination is always
-`/opt/trop/releases/<release>`, with private config in `/etc/trop`.
+Start with the [visual walkthrough](../README.md) for the managed install, upgrade, configuration apply, and restart flows. These recipes are for a deliberate checkpoint or a host whose operator CLI is older.
 
-## Example A: fresh Platform + TOC installation
+## Download a verified bundle to a custom directory
 
-Suppose your host has client-facing LAN address `192.168.20.10` and DNS names
-`trop.example.com`, `trop-web.example.com`, and
-`trop-toc.example.com`. First make those names resolve to the host for
-clients. Then run:
+Use `--dest` when you need to inspect or transfer one verified release bundle. It changes the bundle destination, **not** the managed installation root.
+
+```bash
+mkdir -p "$HOME/trop-bundles"
+./trop-bootstrap --release <release> \
+  --dest "$HOME/trop-bundles/<release>" --fetch-only
+cd "$HOME/trop-bundles/<release>"
+ls trop-install.sh SHA256SUMS-* zarf-package-trop-platform-*.tar.zst
+```
+
+Replace `<release>` with a complete stable tag offered for this host's architecture. `--fetch-only` does not deploy. A custom directory is operator-owned; it does not create or move `/opt/trop/current`. If you later run its installer there, configuration remains local and you own future updates and access protection. An **existing managed installation must upgrade into** `/opt/trop/releases/<release>`; omit `--dest` for it.
+
+## Pause a managed first install after download
+
+```bash
+./trop-bootstrap --release <release> --fetch-only
+cd /opt/trop/releases/<release>
+ls zarf-package-trop-platform-*.tar.zst zarf-init-*.tar.zst
+sudo ./trop-install.sh setup
+sudo ./trop-install.sh deploy zarf-package-trop-platform-<arch>-<release>.tar.zst \
+  --init-package zarf-init-<arch>-<version>.tar.zst
+```
+
+Use the exact architecture and filenames printed by the launcher, rather than typing the angle-bracket placeholders. This is for a **first** installation. Setup asks for the profile, hostnames, LAN address, administrator password, and optional host integrations. Review its plan before deployment.
+
+## Upgrade when the installed operator CLI is old
+
+An older `trop` may lack `upgrade` or `--release`. Download a fresh public launcher into any working directory:
 
 ```bash
 mkdir -p "$HOME/trop-bootstrap" && cd "$HOME/trop-bootstrap"
 curl -fL https://github.com/defencebay/trop-bootstrap/releases/latest/download/trop-bootstrap \
   -o trop-bootstrap
 chmod +x trop-bootstrap
-./trop-bootstrap
+./trop-bootstrap --release <release>
 ```
 
-At the prompts, use the real token at the hidden prompt, select the latest
-complete stable release and the recommended
-`/opt/trop/releases/<release>` destination, then choose to configure and
-install. A typical setup answer set is:
+The launcher detects a healthy managed installation and imports `/etc/trop`; do **not** run `setup` again. Use the recommended `/opt/trop/releases/<release>` destination. If it reports an ambiguous or degraded state, diagnose that state before deploying a different release.
 
-| Prompt | Example answer | Effect |
-| --- | --- | --- |
-| Installation profile | `3` — Platform + TOC | Server, Cloud, and TOC |
-| Setup mode | `1` — Standard | Derive Cloud, XMPP, and TOC names from the Server name |
-| TROP Server hostname | `trop.example.com` | Derives `trop-web.example.com` and `trop-toc.example.com` |
-| LAN address | Select `192.168.20.10` from detected addresses | TROP listens on the client-facing address |
-| Host name resolution | `1` if DNS is not ready on this host | Add only the marked TROP block to this host's `/etc/hosts` |
-| Administrator password | Enter twice at the hidden prompts | Stored in root-only deployment config |
-| Host CA | `Y` for automatic TROP CA | Trust the CA on the Ubuntu host |
-| Operator tools | `Y` | Install `trop`, `trop-doctor`, `trop-install` |
-| Write configuration | `Y` after reviewing the plan | Save `/etc/trop/zarf-config.yaml` and generate secrets |
-
-The `/etc/hosts` choice changes **only this Ubuntu host**. Phones and other
-LAN clients still need DNS or hosts records for the same names. If you already
-have working DNS on the host, choose `2` and leave `/etc/hosts` untouched.
-If you do not want the global operator commands, answer `n`; the release
-remains available under `/opt/trop/current`.
-
-When deployment finishes:
+For an intentionally manual checkpoint after a successful managed fetch:
 
 ```bash
-readlink -f /opt/trop/current
-trop status
-trop health
-trop-doctor install-validate
+./trop-bootstrap --release <release> --fetch-only
+cd /opt/trop/releases/<release>
+sudo ./trop-install.sh update zarf-package-trop-platform-<arch>-<release>.tar.zst
 ```
 
-## Example B: download to a custom directory
+Again, replace placeholders with the exact signed package filename printed by bootstrap. A normal connected upgrade is simpler through `trop upgrade` or the guided launcher.
 
-Use this if you need to inspect or transfer a **verified bundle** before
-installing it:
+## Encrypted configuration and diagnostics
 
-```bash
-mkdir -p "$HOME/trop-bundles"
-./trop-bootstrap --release r70-20260924 \
-  --dest "$HOME/trop-bundles/r70-20260924" --fetch-only
-cd "$HOME/trop-bundles/r70-20260924"
-ls trop-install.sh SHA256SUMS-* zarf-package-trop-platform-*.tar.zst
-```
-
-This does not deploy anything. `--dest` is not a relocation flag for the
-managed installation. If you later run this bundle's `./trop-install.sh setup`
-and `deploy` in that custom directory, its config stays local and it will
-not create `/opt/trop/current`. You own the directory, its config protection,
-and the next manual update. Use the recommended managed destination when you
-want `trop upgrade` and `trop config apply`.
-
-For an existing managed installation, this is the correct release checkpoint:
+If `/etc/trop/zarf-config.enc.yaml` is the active source, use your site's SOPS/age workflow and keep decrypted material out of shared directories. After an edit, a compatible operator CLI can apply the active release's configuration:
 
 ```bash
-./trop-bootstrap --release r70-20260924 --fetch-only
-cd /opt/trop/releases/r70-20260924
-sudo ./trop-install.sh update zarf-package-trop-platform-amd64-r70-20260924.tar.zst
-```
-
-That `update` reuses `/etc/trop`. Do not run `setup` again on an installed
-host. The example package is amd64; use the architecture-specific name printed
-by bootstrap on another host.
-
-## Example C: edit configuration after installation
-
-```bash
-sudoedit /etc/trop/zarf-config.yaml
 trop config apply
 trop health
-readlink -f /opt/trop/current
 ```
 
-The last command should still point to the same release. If your config is
-SOPS-encrypted, edit the protected source appropriately; do not create an
-unprotected plaintext copy in a shared directory. `trop config apply` uses
-the existing encrypted config and its available key.
+To inspect a failed operation:
+
+```bash
+trop-doctor failing-pods
+trop-doctor debug-bundle
+sudo cat /opt/trop/operation-state
+```
+
+On an older release without a compatible `trop config apply`, upgrade the tooling/release first. The launcher verifies cached signed assets on retry and prints a resume command if it stops after download.
