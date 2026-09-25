@@ -1,63 +1,12 @@
-# TROP Standalone: install, configure, upgrade
+# TROP Standalone: operator walkthrough
 
-Run these commands **on the Ubuntu host that will run TROP**. You need internet
-access, `curl`, `sudo`, and a TROP token supplied by DefenceBay. Enter the token
-at a hidden prompt; never put it in a command argument or environment variable.
+Run these commands **on the Ubuntu computer that will run TROP**. You need `curl`, `sudo`, internet access for the connected path, and a TROP token from DefenceBay. These GIFs show **illustrative terminal sessions**, not a live deployment. Copy commands from the code blocks.
 
-## Which command does what?
+## 1. Install and set up a new host
 
-| Command | Use it for | Where it comes from |
-| --- | --- | --- |
-| `./trop-bootstrap` | First install, signed release download, exact online upgrade | Public launcher downloaded to any working directory |
-| `trop` | Operator menu, status, health, guided upgrade, config apply | Installed after a managed install when operator tools are enabled |
-| `trop-doctor` | Validation and diagnostics; `trop` is its short operator entry point | Installed with operator tools |
-| `trop-install` | Release-local deploy/update, recovery, offline/manual operations | Symlink to `/opt/trop/current/trop-install.sh` in a managed install |
+![Illustrative installation and setup terminal session](docs/media/install.gif)
 
-Use `./trop-bootstrap` for the first install and `trop` for normal operations
-afterward. `trop-install` is the lower-level installer for a downloaded bundle
-or recovery procedure. Global commands are present only if setup enabled
-`INSTALL_OPERATOR_TOOLS=true`.
-
-## Where will it install?
-
-The directory from which you run `./trop-bootstrap` only holds the launcher.
-It does **not** determine where TROP is installed. Keep the recommended
-destination in the wizard:
-
-| Path | Contents |
-| --- | --- |
-| `/opt/trop/releases/<release>` | Complete verified bundle: installer, Zarf tools, signed packages, checksums |
-| `/opt/trop/current` | Symlink to the last release that passed the health gate |
-| `/etc/trop/zarf-config.yaml` or `zarf-config.enc.yaml` | Private deployment configuration, outside release directories |
-| `/usr/local/bin/trop`, `trop-doctor`, `trop-install` | Optional global operator commands |
-
-For example, installing `r70-20260924` while your shell is in
-`~/trop-bootstrap` creates `/opt/trop/releases/r70-20260924`, not a TROP
-installation under your home directory. An upgrade adds a new release
-directory, keeps the old one, and changes `current` only after health
-validation. Workload data is separate from these release directories.
-
-### A custom directory
-
-`--dest` changes **where one verified bundle is downloaded**, not the managed
-installation root. Use it for a self-managed checkpoint:
-
-```bash
-mkdir -p "$HOME/trop-bundles"
-./trop-bootstrap --release r70-20260924 \
-  --dest "$HOME/trop-bundles/r70-20260924" --fetch-only
-ls "$HOME/trop-bundles/r70-20260924"
-```
-
-The custom directory remains operator-owned. It does not create or update
-`/opt/trop/current`; running its installer later uses local config. A host
-already using the managed `/opt/trop/current` layout must upgrade into
-`/opt/trop/releases/<release>`, so **omit `--dest` for a normal upgrade**.
-The launcher does not support moving the managed installation root with
-`--dest`. See the [manual custom-directory example](docs/operator-examples.md)
-before choosing this layout.
-
-## First installation and setup
+Download the public launcher into any convenient working directory. We use `~/trop-bootstrap`. That directory holds only the launcher; the wizard installs verified bundles under `/opt/trop/releases/<release>` by default.
 
 ```bash
 mkdir -p "$HOME/trop-bootstrap" && cd "$HOME/trop-bootstrap"
@@ -67,22 +16,24 @@ chmod +x trop-bootstrap
 ./trop-bootstrap
 ```
 
-The launcher recommends the latest complete stable release for this computer's
-architecture and `/opt/trop/releases/<release>` as the destination. Paste the
-token at its hidden prompt. Choose **configure and install** to continue into
-`trop-install.sh setup`. Setup asks for the deployment profile, hostnames,
-client-facing LAN IPv4, and administrator settings, then shows the plan before
-deployment. On a multi-network host, select the address clients will actually
-reach; the default-route address is only a suggestion.
+The token prompt hides what you type. Press Enter for the latest complete stable release and the recommended destination. Choose **1** to download, verify, configure, and install. Here is a sample Platform + TOC setup:
 
-Setup asks separately whether it may manage the marked TROP block in
-`/etc/hosts` (`MANAGE_LOCAL_HOSTS`), install the TROP CA in host trust
-(`INSTALL_HOST_CA`), and install global operator commands
-(`INSTALL_OPERATOR_TOOLS`). Answer `true` only for the integrations you want.
-Missing flags in an imported older config count as `false`. Required TROP
-workloads and k3s/Zarf initialization are shown separately.
+```text
+TROP token: [hidden input]
+TROP release tag [<latest stable release>]: [Enter]
+Verified release-assets directory [/opt/trop/releases/<release>]: [Enter]
+Choose an option [1]: 1
+Continue? [Y/n]: y
 
-After the installer reports success:
+Installation profile: 3             # Platform + TOC
+Setup mode: 1                       # Standard
+TROP Server hostname: trop.example.com
+LAN address for TROP: 192.168.20.10 # client-facing interface
+```
+
+The setup wizard then asks for the administrator password at a hidden prompt, how this host resolves TROP names, and separate consent for the host CA and global operator commands. Review its plan before deploying. Enable **operator tools** to use the commands below. Other LAN devices still need DNS or hosts records for the TROP names; this host's `/etc/hosts` choice does not configure them.
+
+Check the result:
 
 ```bash
 readlink -f /opt/trop/current
@@ -91,76 +42,28 @@ trop health
 trop-doctor install-validate
 ```
 
-`install-validate` securely prompts for administrator credentials. If you set
-`INSTALL_OPERATOR_TOOLS=false`, use the release-local installer and bundled
-validation tools instead of expecting global `trop` commands.
+`install-validate` prompts for administrator credentials. The successful release is linked at `/opt/trop/current`; private configuration lives in `/etc/trop`, while application data is managed separately by k3s.
 
-### Pause after download and resume
+## 2. Upgrade an installed host
 
-```bash
-./trop-bootstrap --release r70-20260924 --fetch-only
-cd /opt/trop/releases/r70-20260924
-sudo ./trop-install.sh setup
-sudo ./trop-install.sh deploy zarf-package-trop-platform-amd64-r70-20260924.tar.zst \
-  --init-package zarf-init-amd64-v0.70.1.tar.zst
-```
-
-These filenames are for an amd64 **first** install. Use the filenames printed
-by the launcher on another architecture. On an already installed host, reuse
-`/etc/trop` and run `update` instead of `setup` and `deploy`.
-
-## Upgrade an installed host
-
-Before an upgrade, check that the managed installation is healthy and keep a
-host/data backup according to your site's policy. Back up the private config
-to a root-only directory:
+![Illustrative guided upgrade terminal session](docs/media/upgrade.gif)
 
 ```bash
-readlink -f /opt/trop/current
 trop health
-sudo install -d -m 0700 /root/trop-backups
-sudo cp -a /etc/trop /root/trop-backups/etc-trop-before-upgrade
-```
-
-For a guided connected upgrade, run `trop upgrade` or select **Upgrade TROP**
-from the `trop` menu. With a compatible operator tool, select an exact release.
-For example, to install `r70-20260924` on a healthy managed host running an
-older release:
-
-```bash
-trop upgrade --release r70-20260924
+trop upgrade
 readlink -f /opt/trop/current
 trop health
 ```
 
-Replace the example tag with the newer release you intend to install. If the
-installed `trop` predates the `--release` option, download the current public
-launcher using the first-install commands above and run
-`./trop-bootstrap --release r70-20260924` (or your chosen tag) instead. It
-detects the active managed release, reuses `/etc/trop`, runs the target
-release's update path, and does not rerun setup or regenerate deployment
-secrets. Keep the recommended `/opt/trop/releases/<release>` destination; do
-not pass `--dest` for a managed upgrade. A healthy installation already using
-`/opt/trop/current` and `/etc/trop` needs no directory or config-format
-migration. If `current` is missing, points outside `/opt/trop/releases`, or
-the host is degraded, investigate that state before upgrading.
+The guided upgrade downloads the current public launcher, asks for the token, offers complete stable releases, and shows the target before installing. It reuses `/etc/trop`; **do not run setup again**. Keep the recommended destination. The health gate moves `/opt/trop/current` to the new release; previous bundles remain on disk.
 
-Afterward, verify the new release and host health:
+If the installed `trop` is too old for `trop upgrade`, refresh the launcher with the commands in step 1 and run `./trop-bootstrap` on the installed host. It detects the managed installation and takes its update path. For a specific version, use `./trop-bootstrap --release <release>`; a newer operator CLI may also support `trop upgrade --release <release>`. Use an exact tag offered for your architecture, such as `rNN-YYYYMMDD`.
 
-```bash
-readlink -f /opt/trop/current
-trop status
-trop health
-trop-doctor install-validate
-sudo cat /opt/trop/operation-state
-```
+## 3. Change the active release's configuration
 
-`install-validate` prompts for administrator credentials. On newer releases,
-the operation state should end in `status=succeeded`. Check the URLs enabled
-by this host's profile from a client that uses the site's DNS. A local health
-check alone cannot prove client DNS and ingress work.
+![Illustrative configuration apply terminal session](docs/media/config-apply.gif)
 
-To apply a later edit to the *active* release's configuration:
+Edit the existing root-only config and apply it. This redeploys affected workloads without switching releases or requiring a separate restart.
 
 ```bash
 sudoedit /etc/trop/zarf-config.yaml
@@ -168,29 +71,61 @@ trop config apply
 trop health
 ```
 
-`trop config apply` requires a compatible installed `trop` and active
-release. It reapplies configuration without changing `/opt/trop/current`.
-Encrypted `/etc/trop/zarf-config.enc.yaml` is also supported when its
-SOPS/age key is available. Keep config files and backups root-only; they
-contain secrets.
+For example, to enable GlitchTip **after upgrading to a release that supports it**, add these keys under the existing `package.deploy.set` mapping. Use the actual DSNs issued for each service project; the values here are placeholders.
 
-## Checks and recovery
-
-```bash
-readlink -f /opt/trop/current      # last activated release
-sudo cat /opt/trop/operation-state # last operation/target/step/result on newer releases
-trop-doctor health
-trop-doctor debug-bundle
+```yaml
+package:
+  deploy:
+    set:
+      ENABLE_GLITCHTIP: "true"
+      SENTRY_ENVIRONMENT: "your-environment"
+      TROP_SERVER_SENTRY_DSN: "<server project DSN>"
+      TROP_SERVER_UI_SENTRY_DSN: "<server UI project DSN>"
+      TROP_CLOUD_SENTRY_DSN: "<cloud project DSN>"
+      TROP_TOC_SENTRY_DSN: "<TOC project DSN>"
 ```
 
-If a download succeeds but deployment fails, read the resume command printed
-by bootstrap. The older `current` link remains on the last healthy release,
-but Kubernetes workloads may have changed before a failed health gate; inspect
-health before retrying. A retry verifies cached signed packages again. Do not
-delete the active release directory. Same-version updates and downgrades are
-rejected; upgrade is not a data rollback.
+Keep the existing mapping and other settings intact. If your host uses SOPS-encrypted `/etc/trop/zarf-config.enc.yaml`, edit the protected source using your site's key workflow; do not create a shared plaintext copy.
 
-For non-interactive automation, use `--release latest --token-stdin` or
-`--list-releases --token-stdin`. Feed the token through standard input from
-your secret source, never as an argument or environment variable. `latest`
-resolves to an immutable tag before downloading.
+## 4. Restart TROP when needed
+
+![Illustrative TROP restart terminal session](docs/media/restart.gif)
+
+```bash
+trop restart-all
+trop health
+```
+
+`restart-all` restarts local k3s and waits for TROP workloads. For a full computer reboot, use `sudo reboot` instead. A successful upgrade or `trop config apply` already performs its own rollout.
+
+## Where things live and which command to use
+
+| Path or command | Meaning |
+| --- | --- |
+| `~/trop-bootstrap/trop-bootstrap` | Example location of the public launcher; it can be elsewhere |
+| `/opt/trop/releases/<release>` | Persistent verified bundle: installer, Zarf tools, signed packages, checksums |
+| `/opt/trop/current` | Symlink to the last release that passed the health gate |
+| `/etc/trop/zarf-config.yaml` | Root-only deployment configuration; some hosts use its encrypted form |
+| `trop` | Operator menu, health, upgrade, config apply, restart, when operator tools are enabled |
+| `trop-doctor` | Detailed validation and diagnostics behind the operator CLI |
+| `trop-install` | Lower-level, release-local deploy/update and recovery commands |
+
+Running the launcher from `~/trop-bootstrap` does **not** install TROP under your home directory. `--dest` changes the download/checkpoint directory for one bundle; it does **not** relocate a managed installation. See the [custom-directory recipe](docs/operator-examples.md#download-a-verified-bundle-to-a-custom-directory).
+
+## Debug and recovery
+
+```bash
+trop status
+trop health
+trop-doctor failing-pods
+trop-doctor debug-bundle
+sudo cat /opt/trop/operation-state
+```
+
+On newer releases, operation state records the last operation and step. If deployment fails after download, inspect health and use the resume command printed by the launcher. The old `current` link remains on the last healthy release, although workloads may have changed before a failed health gate. A retry re-verifies retained signed assets. Never delete the active release directory. An upgrade is not a data rollback.
+
+## Advanced configuration and manual paths
+
+The [advanced operator recipes](docs/operator-examples.md) cover a download checkpoint, a custom directory, a manual first deploy, and older operator tools. For automation, bootstrap accepts `--release latest --token-stdin` or `--list-releases --token-stdin`. Feed a token through standard input from your secret source, never as a shell argument or environment variable. `latest` resolves to an immutable tag before download.
+
+The example animations are generated by [`scripts/render-terminal-demos.py`](scripts/render-terminal-demos.py). Install Pillow and run `python3 scripts/render-terminal-demos.py` to regenerate them.
