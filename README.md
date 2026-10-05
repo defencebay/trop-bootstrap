@@ -1,33 +1,3 @@
-# Optional external log collection
-
-The signed platform release includes `external-observability` and a pinned Alloy
-image for its architecture. Bootstrap fetches and verifies the complete platform
-package as usual; the component requires no separate download or bootstrap flag.
-
-The private installer asks for explicit consent to send TROP namespace logs to a
-central HTTPS endpoint. This defaults to **false** in every installation profile
-and when importing a configuration that has no observability flag. Opt-in needs
-an installation ID, an approved `/loki/api/v1/push` URL, and an existing
-namespace-local Secret with `username` and `password`. Credentials are not part
-of the public bootstrap token or the installer review.
-
-For a fresh host, install with the default disabled state first, provision the
-Secret, then set these keys under `package.deploy.set` in the protected deployment
-configuration and run `trop config apply`:
-
-```yaml
-ENABLE_EXTERNAL_OBSERVABILITY: "true"
-EXTERNAL_OBSERVABILITY_INSTALLATION_ID: "demo-us"
-EXTERNAL_OBSERVABILITY_LOKI_ENDPOINT: "https://otel.piorun.devopsbay.com/loki/api/v1/push"
-EXTERNAL_OBSERVABILITY_CREDENTIALS_SECRET: "external-observability-credentials"
-```
-
-Normal verified upgrades preserve the choice. Set the flag to `false` and apply
-the config to remove the collector. Doctor v0.5.0 adds `trop observability status`
-and `trop observability test`; find the test's `-collector` marker in central
-Grafana to confirm end-to-end delivery. The tools version is pinned by the
-private platform release, so fetching an older release does not add this feature.
-
 # TROP Standalone
 
 Run on the Ubuntu host. Required: `curl`, `sudo`, internet access and a DefenceBay TROP token. Choose a [profile and host size](docs/requirements.md) first.
@@ -137,3 +107,33 @@ sudo cat /opt/trop/operation-state
 [Operator examples](docs/operator-examples.md) has manual deploy, resume, automation and custom `--dest` commands. The default managed bundle path is `/opt/trop/releases/<release>`; `/opt/trop/current` selects the healthy release. A custom `--dest` is a download/checkpoint directory, not a relocation of the managed install. Application data lives in k3s volumes. Keep the active bundle; upgrades are not data rollbacks.
 
 Animations are illustrative. Regenerate with `python3 scripts/render-terminal-demos.py` after installing Pillow.
+
+## Optional external log collection
+
+The signed platform release includes `external-observability` and a pinned Alloy
+image for its architecture. Bootstrap fetches and verifies the complete platform
+package as usual; the component requires no separate download or bootstrap flag.
+
+The private installer asks for explicit consent to send TROP namespace logs to a
+central HTTPS endpoint. This defaults to **false** in every installation profile
+and when importing a configuration that has no observability flag. Opt-in needs
+an installation ID, an approved `/loki/api/v1/push` URL, and an existing
+namespace-local Secret with `username` and `password`. Credentials are not part
+of the public bootstrap token or the installer review.
+
+For a fresh host, install with the default disabled state first, provision the
+Secret, then set these keys under `package.deploy.set` in the protected deployment
+configuration and run `trop config apply`:
+
+```yaml
+ENABLE_EXTERNAL_OBSERVABILITY: "true"
+EXTERNAL_OBSERVABILITY_INSTALLATION_ID: "demo-us"
+EXTERNAL_OBSERVABILITY_LOKI_ENDPOINT: "https://otel.piorun.devopsbay.com/loki/api/v1/push"
+EXTERNAL_OBSERVABILITY_CREDENTIALS_SECRET: "external-observability-credentials"
+```
+
+Normal verified upgrades preserve the choice. Set the flag to `false` and apply
+the config to remove the collector. Doctor v0.5.0 adds `trop observability status`
+and `trop observability test`; find the test's `-collector` marker in central
+Grafana to confirm end-to-end delivery. The tools version is pinned by the
+private platform release, so fetching an older release does not add this feature.
