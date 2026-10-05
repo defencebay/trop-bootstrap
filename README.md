@@ -67,20 +67,6 @@ trop config apply
 trop health
 ```
 
-GlitchTip example: add these keys to the **existing** `package.deploy.set` mapping after upgrading to a compatible release. Use service-specific project DSNs.
-
-```yaml
-package:
-  deploy:
-    set:
-      ENABLE_GLITCHTIP: "true"
-      SENTRY_ENVIRONMENT: "your-environment"
-      TROP_SERVER_SENTRY_DSN: "<server DSN>"
-      TROP_SERVER_UI_SENTRY_DSN: "<server UI DSN>"
-      TROP_CLOUD_SENTRY_DSN: "<cloud DSN>"
-      TROP_TOC_SENTRY_DSN: "<TOC DSN>"
-```
-
 For SOPS installations, edit `/etc/trop/zarf-config.enc.yaml` with the site's key workflow. `config apply` performs the rollout.
 
 ## Restart
@@ -107,3 +93,36 @@ sudo cat /opt/trop/operation-state
 [Operator examples](docs/operator-examples.md) has manual deploy, resume, automation and custom `--dest` commands. The default managed bundle path is `/opt/trop/releases/<release>`; `/opt/trop/current` selects the healthy release. A custom `--dest` is a download/checkpoint directory, not a relocation of the managed install. Application data lives in k3s volumes. Keep the active bundle; upgrades are not data rollbacks.
 
 Animations are illustrative. Regenerate with `python3 scripts/render-terminal-demos.py` after installing Pillow.
+
+## Optional external log collection
+
+The signed platform release includes `external-observability` and a pinned Alloy
+image for its architecture. Bootstrap fetches and verifies the complete platform
+package as usual; the component requires no separate download or bootstrap flag.
+
+The private installer asks for explicit consent to send TROP namespace logs to a
+central HTTPS endpoint. This defaults to **false** in every installation profile
+and when importing a configuration that has no observability flag. Opt-in needs
+an installation ID, an approved `/loki/api/v1/push` URL, and an existing
+namespace-local Secret with `username` and `password`. Credentials are not part
+of the public bootstrap token or the installer review.
+
+For a fresh host, install with the default disabled state first, provision the
+Secret, then set these keys under `package.deploy.set` in the protected deployment
+configuration and run `trop config apply`. Use the installation ID and endpoint
+provided by your operator; the values below are placeholders:
+
+```yaml
+ENABLE_EXTERNAL_OBSERVABILITY: "true"
+EXTERNAL_OBSERVABILITY_INSTALLATION_ID: "installation-id"
+EXTERNAL_OBSERVABILITY_LOKI_ENDPOINT: "https://logs.example.com/loki/api/v1/push"
+EXTERNAL_OBSERVABILITY_CREDENTIALS_SECRET: "external-observability-credentials"
+```
+
+Normal verified upgrades preserve the choice. Set the flag to `false` and apply
+the config to remove the collector. Doctor v0.5.0 adds `trop observability status`
+which checks local Alloy health and log-send counters over 10 seconds without
+reading credentials or creating pods. `trop observability test` is an alias.
+No new sends may simply mean applications are quiet. The tools version is pinned
+by the private platform release, so fetching an older release does not add this
+feature.
