@@ -67,20 +67,6 @@ trop config apply
 trop health
 ```
 
-GlitchTip example: add these keys to the **existing** `package.deploy.set` mapping after upgrading to a compatible release. Use service-specific project DSNs.
-
-```yaml
-package:
-  deploy:
-    set:
-      ENABLE_GLITCHTIP: "true"
-      SENTRY_ENVIRONMENT: "your-environment"
-      TROP_SERVER_SENTRY_DSN: "<server DSN>"
-      TROP_SERVER_UI_SENTRY_DSN: "<server UI DSN>"
-      TROP_CLOUD_SENTRY_DSN: "<cloud DSN>"
-      TROP_TOC_SENTRY_DSN: "<TOC DSN>"
-```
-
 For SOPS installations, edit `/etc/trop/zarf-config.enc.yaml` with the site's key workflow. `config apply` performs the rollout.
 
 ## Restart
@@ -123,12 +109,13 @@ of the public bootstrap token or the installer review.
 
 For a fresh host, install with the default disabled state first, provision the
 Secret, then set these keys under `package.deploy.set` in the protected deployment
-configuration and run `trop config apply`:
+configuration and run `trop config apply`. Use the installation ID and endpoint
+provided by your operator; the values below are placeholders:
 
 ```yaml
 ENABLE_EXTERNAL_OBSERVABILITY: "true"
-EXTERNAL_OBSERVABILITY_INSTALLATION_ID: "demo-us"
-EXTERNAL_OBSERVABILITY_LOKI_ENDPOINT: "https://otel.piorun.devopsbay.com/loki/api/v1/push"
+EXTERNAL_OBSERVABILITY_INSTALLATION_ID: "installation-id"
+EXTERNAL_OBSERVABILITY_LOKI_ENDPOINT: "https://logs.example.com/loki/api/v1/push"
 EXTERNAL_OBSERVABILITY_CREDENTIALS_SECRET: "external-observability-credentials"
 ```
 
@@ -136,5 +123,6 @@ Normal verified upgrades preserve the choice. Set the flag to `false` and apply
 the config to remove the collector. Doctor v0.5.0 adds `trop observability status`
 which checks local Alloy health and log-send counters over 10 seconds without
 reading credentials or creating pods. `trop observability test` is an alias.
-No new sends may simply mean applications are quiet. The tools version is pinned by the
-private platform release, so fetching an older release does not add this feature.
+No new sends may simply mean applications are quiet. The tools version is pinned
+by the private platform release, so fetching an older release does not add this
+feature.
