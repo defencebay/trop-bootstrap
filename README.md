@@ -134,6 +134,7 @@ EXTERNAL_OBSERVABILITY_CREDENTIALS_SECRET: "external-observability-credentials"
 
 Normal verified upgrades preserve the choice. Set the flag to `false` and apply
 the config to remove the collector. Doctor v0.5.0 adds `trop observability status`
-and `trop observability test`; find the test's `-collector` marker in central
-Grafana to confirm end-to-end delivery. The tools version is pinned by the
+which checks local Alloy health and log-send counters over 10 seconds without
+reading credentials or creating pods. `trop observability test` is an alias.
+No new sends may simply mean applications are quiet. The tools version is pinned by the
 private platform release, so fetching an older release does not add this feature.
