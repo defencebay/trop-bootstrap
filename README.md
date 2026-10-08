@@ -1,6 +1,6 @@
 # TROP Standalone
 
-Run on the Ubuntu host. Required: `curl`, `sudo`, internet access and a DefenceBay TROP token. Choose a [profile and host size](docs/requirements.md) first.
+Run on the Linux host (Ubuntu or Debian with `systemd`). Required: `curl`, `sudo`, internet access and a DefenceBay TROP token. Choose a [profile and host size](docs/requirements.md) first.
 
 ## Fresh install
 
@@ -18,7 +18,7 @@ TROP token: [hidden input]
 TROP release tag [latest stable]: [Enter]
 Verified release-assets directory [/opt/trop/releases/<release>]: [Enter]
 Choose an option [1]: 1
-Installation profile: 3             # 1 Server; 2 Platform; 3 Platform + TOC
+Installation profile: 3             # 1 Server; 2 Platform; 3 Platform + TOC + Crisis
 Setup mode: 1                       # Standard
 TROP Server hostname: trop.example.com
 LAN address for TROP: 192.168.20.10 # client-facing interface
@@ -31,6 +31,20 @@ trop status
 trop health
 trop-doctor install-validate
 ```
+
+Profile selection comes from the signed private release. In the OPS-39 installer,
+profile `3` is the recommended Server/XMPP/TOC/Crisis installation: CloudTAK is an
+internal backend, legacy Server UI is not deployed, and AI is disabled. RAVEN,
+Kraken and Colata are enabled; RAVEN initially uses shadow mode. Crisis adds n8n,
+Tile38 and a database in existing PostGIS. TOC/Crisis use shared SSO and persistent
+sessions. External logs and GlitchTip remain opt-in. Existing installed
+configurations preserve their explicit flags during upgrade.
+
+The public bootstrap remains a one-file launcher: it downloads and verifies the
+private bundle; the private installer owns profile selection and deployment. These
+profile changes require a new signed release, not a launcher code change. See
+[OPS-39](https://linear.app/defencebay/issue/OPS-39) for publication and qualification
+state before assuming an older downloaded release has the new profile.
 
 The wizard asks for host integrations separately; review its plan. `install-validate` prompts for administrator credentials. Configure DNS for other LAN clients separately.
 

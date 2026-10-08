@@ -4,8 +4,8 @@ Use this alongside the [operator walkthrough](../README.md). The figures below d
 
 ## Before downloading
 
-- Use an Ubuntu host with `systemd`, `sudo`, `bash`, `curl`, and `openssl`. The launcher accepts Linux `amd64` (x86_64) and `arm64` (aarch64); use the release built for the host architecture. The isolated install and upgrade qualification used Ubuntu on amd64.
-- Provide a client-facing LAN IPv4 address. The chosen Server, Cloud, XMPP, and TOC names must resolve to it wherever clients will connect. The wizard can manage a marked `/etc/hosts` block on this host, but cannot configure other devices or their DNS.
+- Use a Linux host (Ubuntu or Debian) with `systemd`, `sudo`, `bash`, `curl`, and `openssl`. The launcher accepts Linux `amd64` (x86_64) and `arm64` (aarch64); use the release built for the host architecture. The baseline r77 install and reboot qualification also passed on Debian 13.7 amd64 (4 vCPU, 16 GiB RAM, 160 GiB SSD). The expanded OPS-39 profile needs separate qualification; consult the [work item](https://linear.app/defencebay/issue/OPS-39) for the current evidence.
+- Provide a client-facing LAN IPv4 address. The public names selected by the profile (Server, XMPP, TOC and Crisis for OPS-39 profile 3; Cloud only for a profile without TOC) must resolve to it wherever clients will connect. The wizard can manage a marked `/etc/hosts` block on this host, but cannot configure other devices or their DNS.
 - For a connected download, allow HTTPS to GitHub and the private TROP release registry and have a pull-scoped TROP token. The bundle includes the pinned Zarf runtime and k3s init package; `trop`, `trop-doctor`, Docker, and a preinstalled k3s cluster are not first-install prerequisites.
 - Plan local SSD space for **both** the complete signed release archive under `/opt/trop/releases/<release>` and the unpacked k3s images/PVC data under `/var/lib/rancher/k3s`. Upgrades retain older release bundles. A default StorageClass is needed for the chart PVCs; the bundled single-node k3s init supplies one.
 
@@ -19,12 +19,12 @@ df -h /opt /var
 command -v curl openssl systemctl sudo
 ```
 
-## What each installation profile deploys
+## Historical r70 profile resource figures
 
 | Wizard selection | Deployed from the complete package | Steady pod CPU requests | Steady pod memory requests | Default PVC claims |
 | --- | --- | ---: | ---: | ---: |
 | `1` Server only | Infra, Traefik, Server/UI, Media, ejabberd | 1,200m | 3,904 MiB | 39 GiB |
-| `2` Platform (default) | Server-only set + Cloud | 1,700m | 5,312 MiB | 70 GiB |
+| `2` Platform (r70 default) | Server-only set + Cloud | 1,700m | 5,312 MiB | 70 GiB |
 | `3` Platform + TOC | Platform set + TOC web/BFF/Valkey | 1,825m | 5,568 MiB | 71 GiB |
 
 The installer excludes Cloud and TOC when the profile disables them. Media and ejabberd remain part of **all three** profiles. TOC requires Cloud. A migration Job and Zarf/k3s system processes are excluded from the steady pod totals; deployment briefly needs more capacity.
@@ -42,6 +42,28 @@ These are the parts behind the totals:
 | TOC (optional) | Web, BFF, Valkey | 125m | 256 MiB | 1 GiB |
 
 The PVC figures are **logical claims**, not disk reserved in advance by the default local-path provisioner. Recording retention, database growth, image layers, the release archive, and a second retained bundle all consume additional disk. Kubernetes requests are scheduler reservations, not expected peak RAM/CPU use; do not size the host by adding only the request column.
+
+## Recommended TOC and Crisis profile (OPS-39)
+
+The updated private installer selects Server, XMPP, TOC and Crisis in profile `3`,
+using Cloud only as an internal backend. The legacy Server UI Deployment and
+Service are omitted and Cloud has no public ingress. AI workloads are absent.
+RAVEN, Kraken and Colata capabilities are enabled; RAVEN defaults to shadow mode
+until radar publishing is deliberately enabled. Hardware ingestion still needs
+its device/network configuration. External logging, GlitchTip, SMS and n8n API
+integration need their own configured receiver/provider credentials.
+
+Crisis adds backend, frontend, n8n and Tile38, sharing PostGIS and RabbitMQ and
+creating an isolated Crisis database. Its four steady workloads request 300m CPU
+and 640 MiB RAM, with 3 GiB of extra PVC claims. Profile 3 removes the 50m/64 MiB
+Server UI workload from the historical TOC set above. These scheduler requests
+are not capacity or throughput guarantees. Start testing with 4 vCPU, 16 GiB RAM
+and at least 160 GiB SSD; retain space for images, recordings and update bundles.
+
+The new profile is provided by a new signed private release. The public launcher
+continues to work unchanged. Existing configurations keep their explicit flags;
+Crisis requires TOC and Cloud. Qualify fresh install, update, persistent SSO/TLS
+and reboot recovery before advertising a particular release as Debian-qualified.
 
 ## Example host sizes for planning
 
