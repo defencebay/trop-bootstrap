@@ -2,6 +2,8 @@
 
 Run on the Linux host (Ubuntu or Debian with `systemd`). Required: `curl`, `sudo`, internet access and a DefenceBay TROP token. Choose a [profile and host size](docs/requirements.md) first.
 
+See [network and firewall requirements](docs/network.md) for client ports and when public access is needed. LAN/VPN installations do not need public application ports.
+
 ## Fresh install
 
 ![Install and setup terminal demo](docs/media/install.gif)
