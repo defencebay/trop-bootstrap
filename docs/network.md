@@ -9,10 +9,12 @@
 | **443 TCP** | Web / API | Web access without VPN, or Let's Encrypt certificates |
 | **8089 TCP + 8443 TCP** | TAK connection / data packages | TAK clients connect without VPN |
 | **8446 TCP** | Device enrollment | Devices enroll without VPN |
-| **5223 TCP** (or **5222 TCP**) | Native XMPP | XMPP clients connect without VPN |
+| **5223 TCP** | TROP mobile XMPP chat | TROP mobile clients connect without VPN |
 | **8554 TCP / 1935 TCP / 8890 UDP** | RTSP / RTMP / SRT video | Video uses that protocol without VPN |
 | **8189 UDP** | WebRTC video/audio | WebRTC is used without VPN |
 | **8889 TCP / 9997 TCP** | Dedicated video endpoints | Client URLs use these ports without VPN; HTTPS routes on 443 also exist |
+
+**5222 TCP:** optional for other clients explicitly configured for XMPP STARTTLS; not required by TROP mobile apps. Zarf enables both listeners; the server uses 5222 internally.
 
 **Keep private:** SSH **22 TCP**, databases, broker and Kubernetes. **80 TCP** is optional for HTTP; HTTPS works without it. **8883 TCP** is not needed by default.
 
