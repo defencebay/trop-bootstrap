@@ -1,5 +1,5 @@
 <!-- BEGIN TROP SHARED RULES -->
-<!-- source=http://gmktec.local:3000/defencebay/trop.git revision=96dc38d8c7041d233eaffbea996fa1c68874cd53 sha256=f5b644d8b714d844cc0b2629561726749ec5657526d2dcaa910cf925589ed6de -->
+<!-- source=http://gmktec.local:3000/defencebay/trop.git revision=376b92d4e4017f44d8d7abeb8beba3d462b1a0e4 sha256=672b1865fb000e7afc46adce5219356129ebcb4f2d0ab79d231827caf89fb70e -->
 # TROP Shared Review Rules
 
 Apply these rules to changed code, configuration and documentation and the affected
@@ -19,16 +19,42 @@ precedence from document order. Apply rules only where their stated condition ex
 
 ## 01. Architecture & Boundaries
 
-- **TROP-ARCH-001:** Trace dependencies against the repository's declared architecture. Flag imports, calls or data flows that cross a prohibited boundary or reverse an established dependency direction.
-- **TROP-ARCH-002:** Flag vendor, transport or persistence implementation details leaking across a declared abstraction boundary. Require conversion at that boundary where the repository contract calls for independent domain or application types.
-- **TROP-ARCH-003:** Flag changes that remove, disable or bypass an adopted architecture rule, required check or governed standard without an explicit approved standards change. Follow local guidance-only change procedures.
+Enforce SOLID and DRY in every repository. Treat the following rules as mandatory
+engineering standards; do not require a repository-local declaration before
+reporting a concrete violation. Apply them to functions, modules, interfaces and
+classes as appropriate to the language.
+
+### Single Responsibility (SRP)
+
+- **TROP-DESIGN-001:** Flag classes, functions or modules that implement unrelated responsibilities with separate reasons to change. Flag business policy mixed inline with credential resolution, network I/O, persistence or external-type mapping. Separate those responsibilities into focused collaborators; keep orchestration delegating the steps instead of implementing them all inline.
+
+### Open/Closed (OCP)
+
+- **TROP-ARCH-003:** Flag extensions that spread type- or mode-specific conditionals across shared policy, duplicate dispatch decisions, or require modifying unrelated existing handlers to add a supported variant. Isolate variant-specific behavior behind focused implementations or extension points and keep shared orchestration stable.
+
+### Liskov Substitution (LSP)
+
+- **TROP-DESIGN-003:** Flag implementations that reject inputs accepted by the base contract, weaken promised results or invariants, throw unsupported-operation errors for required operations, or silently ignore required behavior. Require every implementation to remain substitutable for its declared contract; identify the caller expectation it violates.
+
+### Interface Segregation (ISP)
+
+- **TROP-ARCH-002:** Flag interfaces that force clients or implementations to depend on unrelated operations they do not need. Split them into small, focused capabilities. Flag dummy implementations, empty methods or unsupported-operation errors introduced solely to satisfy unused interface members.
+
+### Dependency Inversion (DIP)
+
+- **TROP-ARCH-001:** Flag business and use-case policy that directly constructs or depends on concrete persistence, transport or vendor integration implementations. Express the required capabilities through small consumer-owned interfaces or callable contracts and supply concrete implementations at the composition boundary. Keep vendor SDK, transport and database types out of policy contracts; translate them at integration boundaries.
+
+### Don't Repeat Yourself (DRY)
+
+- **TROP-ARCH-005:** Flag duplicated business rules, validation, authorization decisions, protocol mappings or configuration knowledge that must be edited together to preserve the same invariant. Establish one maintained source for that knowledge and reuse it or generate its representations. Distinguish duplicated knowledge from similar syntax that represents different concepts; extract around the shared rule rather than superficial resemblance.
+
+### License constraints
+
 - **TROP-ARCH-004:** Flag any copyleft-licensed dependency or included material, including direct, transitive, optional and build dependencies, vendored or copied code, and bundled artifacts. Identify the component, declared license, version or source revision, and dependency or inclusion path. Verify the license from metadata or license notices; do not infer it from the component name.
 
 ## 02. Design & Complexity
 
-- **TROP-DESIGN-001:** Flag functions, classes or modules combining unrelated responsibilities with separate reasons to change. Identify the responsibilities and a concrete separation. Do not use line count alone as evidence.
 - **TROP-DESIGN-002:** Flag abstractions, wrappers or configuration switches that add indirection without serving a current requirement, a real boundary or meaningful test isolation. Preserve useful interfaces with one implementation; implementation count alone does not prove overengineering.
-- **TROP-DESIGN-003:** Flag interface implementations that silently ignore required behavior, strengthen input preconditions or reject supported operations in violation of the base contract. Identify the broken caller expectation.
 - **TROP-DESIGN-004:** Flag exposed mutable state, public implementation details and ambiguous names that contradict adopted encapsulation or naming standards. Name the leaked invariant or the competing meanings. Do not request speculative renames based only on preference.
 - **TROP-DESIGN-005:** Flag nested branching or mode flags that obscure distinct operations and duplicate their decisions across callers. Propose the simplest structure that makes the existing behavior explicit; do not demand a design pattern by default.
 
