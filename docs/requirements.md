@@ -4,8 +4,8 @@ Use this alongside the [operator walkthrough](../README.md). The figures below d
 
 ## Before downloading
 
-- Use a Linux host (Ubuntu or Debian) with `systemd`, `sudo`, `bash`, `curl`, and `openssl`. The launcher accepts Linux `amd64` (x86_64) and `arm64` (aarch64); use the release built for the host architecture. The baseline r77 install and reboot qualification also passed on Debian 13.7 amd64 (4 vCPU, 16 GiB RAM, 160 GiB SSD). The expanded OPS-39 profile needs separate qualification; consult the [work item](https://linear.app/defencebay/issue/OPS-39) for the current evidence.
-- Provide a client-facing LAN IPv4 address. The public names selected by the profile (Server, XMPP, TOC and Crisis for OPS-39 profile 3; Cloud only for a profile without TOC) must resolve to it wherever clients will connect. The wizard can manage a marked `/etc/hosts` block on this host, but cannot configure other devices or their DNS.
+- Use a Linux host (Ubuntu or Debian) with `systemd`, `sudo`, `bash`, `curl`, and `openssl`. The launcher accepts Linux `amd64` (x86_64) and `arm64` (aarch64); use the release built for the host architecture. The baseline r77 install and reboot qualification also passed on Debian 13.7 amd64 (4 vCPU, 16 GiB RAM, 160 GiB SSD). The expanded TOC and Crisis profile needs separate qualification; check the selected release notes for current qualification status.
+- Provide a client-facing LAN IPv4 address. The public names selected by the profile (Server, XMPP, TOC and Crisis for the updated profile 3; Cloud only for a profile without TOC) must resolve to it wherever clients will connect. The wizard can manage a marked `/etc/hosts` block on this host, but cannot configure other devices or their DNS.
 - For a connected download, allow HTTPS to GitHub and the private TROP release registry and have a pull-scoped TROP token. The bundle includes the pinned Zarf runtime and k3s init package; `trop`, `trop-doctor`, Docker, and a preinstalled k3s cluster are not first-install prerequisites.
 - Plan local SSD space for **both** the complete signed release archive under `/opt/trop/releases/<release>` and the unpacked k3s images/PVC data under `/var/lib/rancher/k3s`. Upgrades retain older release bundles. A default StorageClass is needed for the chart PVCs; the bundled single-node k3s init supplies one.
 
@@ -43,7 +43,7 @@ These are the parts behind the totals:
 
 The PVC figures are **logical claims**, not disk reserved in advance by the default local-path provisioner. Recording retention, database growth, image layers, the release archive, and a second retained bundle all consume additional disk. Kubernetes requests are scheduler reservations, not expected peak RAM/CPU use; do not size the host by adding only the request column.
 
-## Recommended TOC and Crisis profile (OPS-39)
+## Recommended TOC and Crisis profile
 
 The updated private installer selects Server, XMPP, TOC and Crisis in profile `3`,
 using Cloud only as an internal backend. The legacy Server UI Deployment and
@@ -86,4 +86,10 @@ df -h /opt /var
 
 Replace `<release>` with the selected tag. Do not delete the active directory reported by `readlink -f /opt/trop/current`. On a first installation, `trop-doctor install-preflight` is **not available yet**; it arrives only if the operator-tools option is enabled during deployment.
 
-These numbers come from rendering the [r70 Zarf platform manifest](https://github.com/defencebay/trop-infra/blob/r70-20260924/zarf/packages/platform/zarf.yaml) with each component's `values-zarf.yaml` and chart defaults in [trop-infra](https://github.com/defencebay/trop-infra/tree/r70-20260924/helm/charts/trop). Recalculate them for a newer release or changed chart values.
+These historical figures describe the default workloads and chart values packaged in `r70-20260924`. For a newer release or changed resource settings, inspect the resulting workload declarations as described in the [CPU/RAM configuration guide](resources.md#verify-after-applying-or-upgrading).
+
+## Adjust individual service resources
+
+Use the [CPU/RAM configuration guide](resources.md) to set requests and limits
+for each service in a supporting signed release. These settings are retained
+through normal upgrades; they do not change PVC sizes or enable optional services.

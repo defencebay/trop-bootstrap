@@ -34,7 +34,7 @@ trop health
 trop-doctor install-validate
 ```
 
-Profile selection comes from the signed private release. In the OPS-39 installer,
+Profile selection comes from the signed private release. In the updated installer,
 profile `3` is the recommended Server/XMPP/TOC/Crisis installation: CloudTAK is an
 internal backend, legacy Server UI is not deployed, and AI is disabled. RAVEN,
 Kraken and Colata are enabled; RAVEN initially uses shadow mode. Crisis adds n8n,
@@ -44,9 +44,8 @@ configurations preserve their explicit flags during upgrade.
 
 The public bootstrap remains a one-file launcher: it downloads and verifies the
 private bundle; the private installer owns profile selection and deployment. These
-profile changes require a new signed release, not a launcher code change. See
-[OPS-39](https://linear.app/defencebay/issue/OPS-39) for publication and qualification
-state before assuming an older downloaded release has the new profile.
+profile changes require a new signed release, not a launcher code change. Check the selected release notes for publication and qualification status before
+assuming an older downloaded release has the new profile.
 
 The wizard asks for host integrations separately; review its plan. `install-validate` prompts for administrator credentials. Configure DNS for other LAN clients separately.
 
@@ -84,6 +83,15 @@ trop health
 ```
 
 For SOPS installations, edit `/etc/trop/zarf-config.enc.yaml` with the site's key workflow. `config apply` performs the rollout.
+
+## Change CPU and memory resources
+
+With a signed platform release that supports per-service resources, edit
+`/etc/trop/resources.yaml`, then run `trop config apply` and `trop health`.
+The installer reuses the file during upgrades. See the
+[CPU/RAM configuration guide](docs/resources.md) for an example, every service key,
+and how to check the resulting settings. Older releases, including r81, do not
+support this file; downloading a newer public launcher alone does not add support.
 
 ## Restart
 
