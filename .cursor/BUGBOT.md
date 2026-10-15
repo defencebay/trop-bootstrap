@@ -1,5 +1,5 @@
 <!-- BEGIN TROP SHARED RULES -->
-<!-- source=http://gmktec.local:3000/defencebay/trop.git revision=a95c0fe0575bb8f2031cc923bb83c2ed581e2b31 sha256=415929c188de1fef46faf44f05db30583a11db4d5778eef7e15592945518cc91 -->
+<!-- source=http://gmktec.local:3000/defencebay/trop.git revision=4303207e7beeb5449ec2c4b02a65bf4a4ec53240 sha256=0edc71ba0082b3153fab622459b94f1e05824b74e82601f192edd4a19a0c1d59 -->
 # TROP Shared Review Rules
 
 Apply these rules to changed code, configuration and documentation and the affected
@@ -19,11 +19,11 @@ precedence from document order. Apply rules only where their stated condition ex
 
 ## 01. Architecture & Boundaries
 
-- **TROP-ARCH-006:** Enforce SOLID and DRY in every repository as mandatory engineering standards. Report concrete violations without requiring a repository-local declaration. Apply the principles to functions, modules, interfaces and classes as appropriate to the language.
+- **TROP-ARCH-001:** Enforce SOLID, DRY and YAGNI in every repository as mandatory engineering standards. Report concrete violations without requiring a repository-local declaration. Apply the principles to functions, modules, interfaces and classes as appropriate to the language.
 
 ### Single Responsibility (SRP)
 
-- **TROP-DESIGN-001:** Flag classes, functions or modules that implement unrelated responsibilities with separate reasons to change. Flag business policy mixed inline with credential resolution, network I/O, persistence or external-type mapping. Separate those responsibilities into focused collaborators; keep orchestration delegating the steps instead of implementing them all inline.
+- **TROP-ARCH-002:** Flag classes, functions or modules that implement unrelated responsibilities with separate reasons to change. Flag business policy mixed inline with credential resolution, network I/O, persistence or external-type mapping. Separate those responsibilities into focused collaborators; keep orchestration delegating the steps instead of implementing them all inline.
 
 ### Open/Closed (OCP)
 
@@ -31,29 +31,33 @@ precedence from document order. Apply rules only where their stated condition ex
 
 ### Liskov Substitution (LSP)
 
-- **TROP-DESIGN-003:** Flag implementations that reject inputs accepted by the base contract, weaken promised results or invariants, throw unsupported-operation errors for required operations, or silently ignore required behavior. Require every implementation to remain substitutable for its declared contract; identify the caller expectation it violates.
+- **TROP-ARCH-004:** Flag implementations that reject inputs accepted by the base contract, weaken promised results or invariants, throw unsupported-operation errors for required operations, or silently ignore required behavior. Require every implementation to remain substitutable for its declared contract; identify the caller expectation it violates.
 
 ### Interface Segregation (ISP)
 
-- **TROP-ARCH-002:** Flag interfaces that force clients or implementations to depend on unrelated operations they do not need. Split them into small, focused capabilities. Flag dummy implementations, empty methods or unsupported-operation errors introduced solely to satisfy unused interface members.
+- **TROP-ARCH-005:** Flag interfaces that force clients or implementations to depend on unrelated operations they do not need. Split them into small, focused capabilities. Flag dummy implementations, empty methods or unsupported-operation errors introduced solely to satisfy unused interface members.
 
 ### Dependency Inversion (DIP)
 
-- **TROP-ARCH-001:** Flag business and use-case policy that directly constructs or depends on concrete persistence, transport or vendor integration implementations. Express the required capabilities through small consumer-owned interfaces or callable contracts and supply concrete implementations at the composition boundary. Keep vendor SDK, transport and database types out of policy contracts; translate them at integration boundaries.
+- **TROP-ARCH-006:** Flag business and use-case policy that directly constructs or depends on concrete persistence, transport or vendor integration implementations. Express the required capabilities through small consumer-owned interfaces or callable contracts and supply concrete implementations at the composition boundary. Keep vendor SDK, transport and database types out of policy contracts; translate them at integration boundaries.
 
 ### Don't Repeat Yourself (DRY)
 
-- **TROP-ARCH-005:** Flag duplicated business rules, validation, authorization decisions, protocol mappings or configuration knowledge that must be edited together to preserve the same invariant. Establish one maintained source for that knowledge and reuse it or generate its representations. Distinguish duplicated knowledge from similar syntax that represents different concepts; extract around the shared rule rather than superficial resemblance.
+- **TROP-ARCH-007:** Flag duplicated business rules, validation, authorization decisions, protocol mappings or configuration knowledge that must be edited together to preserve the same invariant. Establish one maintained source for that knowledge and reuse it or generate its representations. Distinguish duplicated knowledge from similar syntax that represents different concepts; extract around the shared rule rather than superficial resemblance.
+
+### You Aren't Gonna Need It (YAGNI)
+
+- **TROP-ARCH-008:** Flag functionality, abstractions, configuration switches, dependencies or infrastructure added only for hypothetical future needs. Require a current requirement, supported contract or concrete consumer for each added capability. Remove unused extension points, dormant speculative branches and unused modes; implement the smallest solution that meets the present need. Do not accept possible future reuse as sufficient justification.
 
 ### License constraints
 
-- **TROP-ARCH-004:** Flag any copyleft-licensed dependency or included material, including direct, transitive, optional and build dependencies, vendored or copied code, and bundled artifacts. Identify the component, declared license, version or source revision, and dependency or inclusion path. Verify the license from metadata or license notices; do not infer it from the component name.
+- **TROP-ARCH-009:** Flag any copyleft-licensed dependency or included material, including direct, transitive, optional and build dependencies, vendored or copied code, and bundled artifacts. Identify the component, declared license, version or source revision, and dependency or inclusion path. Verify the license from metadata or license notices; do not infer it from the component name.
 
 ## 02. Design & Complexity
 
-- **TROP-DESIGN-002:** Flag abstractions, wrappers or configuration switches that add indirection without serving a current requirement, a real boundary or meaningful test isolation. Preserve useful interfaces with one implementation; implementation count alone does not prove overengineering.
-- **TROP-DESIGN-004:** Flag exposed mutable state, public implementation details and ambiguous names that contradict adopted encapsulation or naming standards. Name the leaked invariant or the competing meanings. Do not request speculative renames based only on preference.
-- **TROP-DESIGN-005:** Flag nested branching or mode flags that obscure distinct operations and duplicate their decisions across callers. Propose the simplest structure that makes the existing behavior explicit; do not demand a design pattern by default.
+- **TROP-DESIGN-001:** Flag abstractions, wrappers or configuration switches that add indirection without serving a current requirement, a real boundary or meaningful test isolation. Preserve useful interfaces with one implementation; implementation count alone does not prove overengineering.
+- **TROP-DESIGN-002:** Flag exposed mutable state, public implementation details and ambiguous names that contradict adopted encapsulation or naming standards. Name the leaked invariant or the competing meanings. Do not request speculative renames based only on preference.
+- **TROP-DESIGN-003:** Flag nested branching or mode flags that obscure distinct operations and duplicate their decisions across callers. Propose the simplest structure that makes the existing behavior explicit; do not demand a design pattern by default.
 
 ## 03. Contracts & Compatibility
 
