@@ -1,5 +1,5 @@
 <!-- BEGIN TROP SHARED RULES -->
-<!-- source=http://gmktec.local:3000/defencebay/trop.git revision=311d3cf71c4eedab17695cdf9224cbe5851e3f89 sha256=7fcfdc9ec3c071a655ef26818d2b1bec221af80b6f839750307e3a5d765000a7 -->
+<!-- source=http://gmktec.local:3000/defencebay/trop.git revision=1e45cd557193a59b643af3f192b67a21a7cab4e7 sha256=d419e6d1b92523a00fb991af2d3b03995aed0205fda6530bd571ca1df62164f4 -->
 # TROP Shared Review Rules
 
 Apply these rules to changed code, configuration and documentation and the affected
@@ -11,7 +11,7 @@ precedence from document order. Apply rules only where their stated condition ex
 
 ## 00. Review Contract
 
-- **TROP-REVIEW-001:** Report behavioral defects and concrete violations of adopted architecture, design and readability standards. Label each finding `Defect` or `Standard`. For a defect, state the triggering input or interleaving and the observable consequence. For a standard violation, identify the violating construct and required correction; do not invent a runtime failure to justify it.
+- **TROP-REVIEW-001:** Use Cursor Bugbot's native review-comment style, formatting and severity conventions. Write concise, actionable comments about one concrete issue at a time, explaining the problem and the correction. Report both behavioral defects and violations of adopted architecture, design and readability standards without inventing runtime consequences. Do not impose custom category labels or a separate comment template.
 - **TROP-REVIEW-002:** Cite the applicable rule ID and exact changed location. Explain the evidence and smallest useful correction. Read affected callers, contracts and tests before asserting a violation. Do not invent requirements, consumers, command results or verification evidence.
 - **TROP-REVIEW-003:** Report each underlying issue once. Prefer the most specific applicable rule ID, including existing local IDs. Do not manufacture findings to complete a checklist. Do not report a pre-existing issue unless the change introduces a new failure path or demonstrably worsens it.
 - **TROP-REVIEW-004:** Use formatters, linters and generated checks for mechanical style. Report weakened checks and substantive design/readability violations that automation does not establish. Do not repeat a diagnostic already present on the same head without additional actionable information.
