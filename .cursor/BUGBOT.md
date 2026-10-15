@@ -1,5 +1,5 @@
 <!-- BEGIN TROP SHARED RULES -->
-<!-- source=http://gmktec.local:3000/defencebay/trop.git revision=376b92d4e4017f44d8d7abeb8beba3d462b1a0e4 sha256=672b1865fb000e7afc46adce5219356129ebcb4f2d0ab79d231827caf89fb70e -->
+<!-- source=http://gmktec.local:3000/defencebay/trop.git revision=a95c0fe0575bb8f2031cc923bb83c2ed581e2b31 sha256=415929c188de1fef46faf44f05db30583a11db4d5778eef7e15592945518cc91 -->
 # TROP Shared Review Rules
 
 Apply these rules to changed code, configuration and documentation and the affected
@@ -19,10 +19,7 @@ precedence from document order. Apply rules only where their stated condition ex
 
 ## 01. Architecture & Boundaries
 
-Enforce SOLID and DRY in every repository. Treat the following rules as mandatory
-engineering standards; do not require a repository-local declaration before
-reporting a concrete violation. Apply them to functions, modules, interfaces and
-classes as appropriate to the language.
+- **TROP-ARCH-006:** Enforce SOLID and DRY in every repository as mandatory engineering standards. Report concrete violations without requiring a repository-local declaration. Apply the principles to functions, modules, interfaces and classes as appropriate to the language.
 
 ### Single Responsibility (SRP)
 
