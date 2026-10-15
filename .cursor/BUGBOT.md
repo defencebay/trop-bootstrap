@@ -1,5 +1,5 @@
 <!-- BEGIN TROP SHARED RULES -->
-<!-- source=http://gmktec.local:3000/defencebay/trop.git revision=1e45cd557193a59b643af3f192b67a21a7cab4e7 sha256=d419e6d1b92523a00fb991af2d3b03995aed0205fda6530bd571ca1df62164f4 -->
+<!-- source=http://gmktec.local:3000/defencebay/trop.git revision=96dc38d8c7041d233eaffbea996fa1c68874cd53 sha256=f5b644d8b714d844cc0b2629561726749ec5657526d2dcaa910cf925589ed6de -->
 # TROP Shared Review Rules
 
 Apply these rules to changed code, configuration and documentation and the affected
@@ -11,16 +11,18 @@ precedence from document order. Apply rules only where their stated condition ex
 
 ## 00. Review Contract
 
-- **TROP-REVIEW-001:** Use Cursor Bugbot's native review-comment style, formatting and severity conventions. Write concise, actionable comments about one concrete issue at a time, explaining the problem and the correction. Report both behavioral defects and violations of adopted architecture, design and readability standards without inventing runtime consequences. Do not impose custom category labels or a separate comment template.
+- **TROP-REVIEW-001:** Write concise, actionable inline review comments. Open with a short, specific title naming the issue. In a brief body, explain the triggering condition, the demonstrated impact or violated standard, and the smallest useful correction. Anchor the comment to the relevant lines and keep one issue per thread. Use direct, factual language; set severity according to demonstrated impact and scope. Report behavioral defects and violations of adopted architecture, design and readability standards without inventing runtime consequences. Do not add custom category labels or require fixed section headings.
 - **TROP-REVIEW-002:** Cite the applicable rule ID and exact changed location. Explain the evidence and smallest useful correction. Read affected callers, contracts and tests before asserting a violation. Do not invent requirements, consumers, command results or verification evidence.
 - **TROP-REVIEW-003:** Report each underlying issue once. Prefer the most specific applicable rule ID, including existing local IDs. Do not manufacture findings to complete a checklist. Do not report a pre-existing issue unless the change introduces a new failure path or demonstrably worsens it.
 - **TROP-REVIEW-004:** Use formatters, linters and generated checks for mechanical style. Report weakened checks and substantive design/readability violations that automation does not establish. Do not repeat a diagnostic already present on the same head without additional actionable information.
+- **TROP-REVIEW-005:** Reopen resolved review comments and threads when the reported issue remains unaddressed in the current code. Verify the actual fix and supporting evidence before accepting resolution. Do not silently skip a reported issue solely because its comment or thread was marked resolved.
 
 ## 01. Architecture & Boundaries
 
-- **TROP-ARCH-001:** Trace dependencies against the repository's declared architecture. Flag imports, calls or data flows that cross a prohibited boundary or reverse an established dependency direction. Cite the owning module and boundary; do not impose Clean/Onion Architecture on repositories that have not adopted it.
+- **TROP-ARCH-001:** Trace dependencies against the repository's declared architecture. Flag imports, calls or data flows that cross a prohibited boundary or reverse an established dependency direction.
 - **TROP-ARCH-002:** Flag vendor, transport or persistence implementation details leaking across a declared abstraction boundary. Require conversion at that boundary where the repository contract calls for independent domain or application types.
 - **TROP-ARCH-003:** Flag changes that remove, disable or bypass an adopted architecture rule, required check or governed standard without an explicit approved standards change. Follow local guidance-only change procedures.
+- **TROP-ARCH-004:** Flag any copyleft-licensed dependency or included material, including direct, transitive, optional and build dependencies, vendored or copied code, and bundled artifacts. Identify the component, declared license, version or source revision, and dependency or inclusion path. Verify the license from metadata or license notices; do not infer it from the component name.
 
 ## 02. Design & Complexity
 
