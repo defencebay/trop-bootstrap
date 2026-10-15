@@ -1,8 +1,7 @@
 # Change CPU and memory per service
 
 This feature requires a signed private installer/platform release containing
-per-service resource support. It is being introduced with OPS-39; r81 and older
-packages do not implement it. A new public launcher alone cannot add resource
+per-service resource support. Packages r81 and older do not implement it. A new public launcher alone cannot add resource
 mappings to an older immutable package. Check the selected release notes before
 using these instructions.
 
