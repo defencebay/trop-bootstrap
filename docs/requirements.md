@@ -87,3 +87,9 @@ df -h /opt /var
 Replace `<release>` with the selected tag. Do not delete the active directory reported by `readlink -f /opt/trop/current`. On a first installation, `trop-doctor install-preflight` is **not available yet**; it arrives only if the operator-tools option is enabled during deployment.
 
 These numbers come from rendering the [r70 Zarf platform manifest](https://github.com/defencebay/trop-infra/blob/r70-20260924/zarf/packages/platform/zarf.yaml) with each component's `values-zarf.yaml` and chart defaults in [trop-infra](https://github.com/defencebay/trop-infra/tree/r70-20260924/helm/charts/trop). Recalculate them for a newer release or changed chart values.
+
+## Adjust individual service resources
+
+Use the [CPU/RAM configuration guide](resources.md) to set requests and limits
+for each service in a supporting signed release. These settings are retained
+through normal upgrades; they do not change PVC sizes or enable optional services.

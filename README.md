@@ -85,6 +85,15 @@ trop health
 
 For SOPS installations, edit `/etc/trop/zarf-config.enc.yaml` with the site's key workflow. `config apply` performs the rollout.
 
+## Change CPU and memory resources
+
+With a signed platform release that supports per-service resources, edit
+`/etc/trop/resources.yaml`, then run `trop config apply` and `trop health`.
+The installer reuses the file during upgrades. See the
+[CPU/RAM configuration guide](docs/resources.md) for an example, every service key,
+and how to check the resulting settings. Older releases, including r81, do not
+support this file; downloading a newer public launcher alone does not add support.
+
 ## Restart
 
 ![Restart terminal demo](docs/media/restart.gif)
