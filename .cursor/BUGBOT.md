@@ -1,5 +1,5 @@
 <!-- BEGIN TROP SHARED RULES -->
-<!-- source=http://gmktec.local:3000/defencebay/trop.git revision=4303207e7beeb5449ec2c4b02a65bf4a4ec53240 sha256=0edc71ba0082b3153fab622459b94f1e05824b74e82601f192edd4a19a0c1d59 -->
+<!-- source=http://gmktec.local:3000/defencebay/trop.git revision=28b32c8494fba485517cf6f363692361c9456d24 sha256=01fd823960873b44fdb51895bb1ef8b0218e210d64c46ad0b746ac2e54a7ffb0 -->
 # TROP Shared Review Rules
 
 Apply these rules to changed code, configuration and documentation and the affected
@@ -53,11 +53,25 @@ precedence from document order. Apply rules only where their stated condition ex
 
 - **TROP-ARCH-009:** Flag any copyleft-licensed dependency or included material, including direct, transitive, optional and build dependencies, vendored or copied code, and bundled artifacts. Identify the component, declared license, version or source revision, and dependency or inclusion path. Verify the license from metadata or license notices; do not infer it from the component name.
 
-## 02. Design & Complexity
+## 02. OOP Principles
 
-- **TROP-DESIGN-001:** Flag abstractions, wrappers or configuration switches that add indirection without serving a current requirement, a real boundary or meaningful test isolation. Preserve useful interfaces with one implementation; implementation count alone does not prove overengineering.
-- **TROP-DESIGN-002:** Flag exposed mutable state, public implementation details and ambiguous names that contradict adopted encapsulation or naming standards. Name the leaked invariant or the competing meanings. Do not request speculative renames based only on preference.
-- **TROP-DESIGN-003:** Flag nested branching or mode flags that obscure distinct operations and duplicate their decisions across callers. Propose the simplest structure that makes the existing behavior explicit; do not demand a design pattern by default.
+### Encapsulation
+
+- **TROP-DESIGN-001:** Flag public methods used only within their owning type. Make them private unless an external contract requires public access.
+- **TROP-DESIGN-002:** Flag mutable state where immutable values and transformations meet the same need. Prefer immutable data.
+- **TROP-DESIGN-003:** Flag business logic in objects intended only to carry or serialize data. Move it to the responsible domain object or service.
+- **TROP-DESIGN-004:** Flag implementation details exposed through public APIs. Expose only what callers need.
+
+### Abstraction
+
+- **TROP-DESIGN-005:** Flag vendor-specific types, storage details and transport errors leaking into business-facing contracts. Translate them at the integration boundary.
+- **TROP-DESIGN-006:** Flag null values used to represent business states such as anonymous, default or unrestricted. Model each state explicitly with a named value or type.
+
+### Polymorphism
+
+- **TROP-DESIGN-007:** Flag repeated type checks that select behavior across multiple methods. Move that behavior behind a shared contract with distinct implementations.
+- **TROP-DESIGN-008:** Flag type-based branching that can be replaced by a direct call to the responsible implementation. Keep necessary type dispatch in one place.
+- **TROP-DESIGN-009:** Flag classes whose mode or type flags select distinct behaviors. Separate those behaviors into focused implementations of a shared contract.
 
 ## 03. Contracts & Compatibility
 
