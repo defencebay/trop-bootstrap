@@ -84,6 +84,24 @@ trop health
 
 For SOPS installations, edit `/etc/trop/zarf-config.enc.yaml` with the site's key workflow. `config apply` performs the rollout.
 
+## Use your own enrollment certificate
+
+Requires a signed platform release with custom enrollment TLS support;
+updating the public launcher alone does not add it.
+
+In advanced setup, select operator-provided Enrollment TLS and supply a fullchain
+PEM plus unencrypted private key for `TROP_SERVER_HOSTNAME`. Setup saves
+`ENROLLMENT_TLS_MODE=custom`, `ENROLLMENT_TLS_CERT_PATH` and
+`ENROLLMENT_TLS_KEY_PATH` under `package.deploy.set`, using absolute host paths.
+
+Keep PEMs outside `/etc/trop` and `/opt/trop` (for example, `/etc/trop-tls`),
+restrict the key to its operator/root (normally mode 0600), and back them up
+separately. SOPS config encryption does not protect external PEM files.
+After external renewal, replace the files and run `trop config apply`, then
+`trop health`. Do not rerun setup: it regenerates installation secrets.
+Clients need DNS and TCP 8446; private CA certificates require explicit trust
+on clients and the operator host.
+
 ## Change CPU and memory resources
 
 With a signed platform release that supports per-service resources, edit
