@@ -1,0 +1,12 @@
+* @defencebay/developers
+
+AGENTS.md @defencebay/standards-stewards
+**/AGENTS.md @defencebay/standards-stewards
+CLAUDE.md @defencebay/standards-stewards
+**/CLAUDE.md @defencebay/standards-stewards
+CONTEXT.md @defencebay/standards-stewards
+**/CONTEXT.md @defencebay/standards-stewards
+.agents/ @defencebay/standards-stewards
+**/.agents/ @defencebay/standards-stewards
+.cursor/ @defencebay/standards-stewards
+**/.cursor/ @defencebay/standards-stewards
