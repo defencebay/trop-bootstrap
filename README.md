@@ -4,6 +4,9 @@ Run on the Linux host (Ubuntu or Debian with `systemd`). Required: `curl`, `sudo
 
 See [network and firewall requirements](docs/network.md) for client ports and when public access is needed. LAN/VPN installations do not need public application ports.
 
+For browser video, see [WebRTC addresses and DNS](docs/network.md#webrtc-addresses-and-dns),
+including installations whose public DNS is configured later.
+
 ## Fresh install
 
 ![Install and setup terminal demo](docs/media/install.gif)
