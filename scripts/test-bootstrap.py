@@ -384,14 +384,23 @@ class BootstrapCacheTests(unittest.TestCase):
         self.assertEqual(status, 0, output)
         self.assertIn("Keeping the installed variant: go", output)
         self.assertEqual(self.installer_log.read_text().splitlines(), ["update"])
+        code = self.main_code(auto_install=False, arguments='--release "$TEST_RELEASE" --fetch-only')
+        status, output = self.run_main_tty(code=code)
+        self.assertEqual(status, 0, output)
+        self.assertIn("Keeping the installed variant: go", output)
+        self.assertIn("zarf-package-trop-platform-go-", output)
+        self.assertEqual(self.installer_log.read_text().splitlines(), ["update"])
 
     def test_installed_python_rejects_explicit_go_before_installer(self):
         self.installed_fixture("python")
-        code = self.main_code(auto_install=True, arguments='--release "$TEST_RELEASE" --backend go')
-        status, output = self.run_main_tty(code=code)
-        self.assertNotEqual(status, 0, output)
-        self.assertIn("requires a separate migration", output)
-        self.assertFalse(self.installer_log.exists(), output)
+        for arguments in ('--release "$TEST_RELEASE" --backend go',
+                          '--release "$TEST_RELEASE" --backend go --fetch-only'):
+            with self.subTest(arguments=arguments):
+                code = self.main_code(auto_install=True, arguments=arguments)
+                status, output = self.run_main_tty(code=code)
+                self.assertNotEqual(status, 0, output)
+                self.assertIn("requires a separate migration", output)
+                self.assertFalse(self.installer_log.exists(), output)
 
     def test_installed_python_keeps_legacy_upgrade_without_backend_flag(self):
         self.installed_fixture("python")
@@ -493,7 +502,7 @@ registry_tags() {
     def test_invalid_variant_and_python_import_into_go_stop_before_setup(self):
         for code, error in (
             ('parse_arguments --backend invalid', '--backend must be python or go'),
-            ('parse_arguments --backend go --config old.yaml; select_backend amd64', 'imports Python configurations only'),
+            ('active_system_release() { :; }; parse_arguments --backend go --config old.yaml; select_backend amd64', 'imports Python configurations only'),
         ):
             with self.subTest(code=code):
                 result = self.shell(code)

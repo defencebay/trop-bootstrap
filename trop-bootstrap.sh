@@ -201,7 +201,7 @@ setup_action() {
 select_backend() {
   local architecture="$1" active installed="" identity choice
   active="$(active_system_release)"
-  if [[ -n "$active" && "$FETCH_ONLY" != "true" ]]; then
+  if [[ -n "$active" ]]; then
     shopt -s nullglob
     local packages=("$INSTALL_ROOT/current"/zarf-package-trop-platform*-"$architecture"-"$active".tar.zst)
     shopt -u nullglob
@@ -212,10 +212,13 @@ select_backend() {
       "trop-platform-go|$active|$architecture") installed=go ;;
       *) die "active signed package identity does not match the installed release and architecture" ;;
     esac
-    [[ -z "$BACKEND" || "$BACKEND" == "$installed" ]] ||
-      die "installed variant is $installed; changing it to $BACKEND requires a separate migration, not an upgrade"
-    BACKEND="$installed"
-    info "Keeping the installed variant: $BACKEND"
+    if [[ -n "$BACKEND" && "$BACKEND" != "$installed" ]]; then
+      [[ "$FETCH_ONLY" == true && -n "$DESTINATION" && "$DESTINATION" != "$INSTALL_ROOT/releases/"* ]] ||
+        die "installed variant is $installed; changing it to $BACKEND requires a separate migration, not an upgrade. To stage a download, use --fetch-only with a separate --dest directory"
+    else
+      BACKEND="$installed"
+      info "Keeping the installed variant: $BACKEND"
+    fi
   fi
   if [[ -z "$BACKEND" && "$TOKEN_STDIN" != "true" && -t 0 ]]; then
     while true; do
