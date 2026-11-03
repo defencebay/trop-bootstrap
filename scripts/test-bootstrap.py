@@ -74,16 +74,19 @@ class BootstrapCacheTests(unittest.TestCase):
         self.installation_state = "fresh"
         self.system = self.work / "system"
         self.config = self.work / "config.yaml"
-        self.bootstrap = self.work / "bootstrap.sh"
-        self.bootstrap.write_text(BOOTSTRAP.read_text().replace(
-            'readonly INSTALL_ROOT="/opt/trop"', f'readonly INSTALL_ROOT="{self.system}"'
-        ).replace(
-            'readonly SYSTEM_CONFIG_FILE="/etc/trop/zarf-config.yaml"',
-            f'readonly SYSTEM_CONFIG_FILE="{self.config}"'
-        ).replace(
-            'readonly SYSTEM_ENCRYPTED_CONFIG_FILE="/etc/trop/zarf-config.enc.yaml"',
-            f'readonly SYSTEM_ENCRYPTED_CONFIG_FILE="{self.work / "config.enc.yaml"}"'
-        ))
+        self.bootstraps = {}
+        for backend, filename in (("python", "trop-bootstrap.sh"), ("go", "trop-bootstrap-go.sh")):
+            script = self.work / filename
+            script.write_text((ROOT / filename).read_text().replace(
+                'readonly INSTALL_ROOT="/opt/trop"', f'readonly INSTALL_ROOT="{self.system}"'
+            ).replace(
+                'readonly SYSTEM_CONFIG_FILE="/etc/trop/zarf-config.yaml"',
+                f'readonly SYSTEM_CONFIG_FILE="{self.config}"'
+            ).replace(
+                'readonly SYSTEM_ENCRYPTED_CONFIG_FILE="/etc/trop/zarf-config.enc.yaml"',
+                f'readonly SYSTEM_ENCRYPTED_CONFIG_FILE="{self.work / "config.enc.yaml"}"'
+            ))
+            self.bootstraps[backend] = script
         self.make_cache()
 
     def make_package(self, name, version, architecture, documentation=None, *, signer=None):
@@ -156,8 +159,7 @@ class BootstrapCacheTests(unittest.TestCase):
     def environment(self):
         return {
             **os.environ,
-            "TEST_BOOTSTRAP": str(self.bootstrap),
-            "TEST_BACKEND": self.backend,
+            "TEST_BOOTSTRAP": str(self.bootstraps[self.backend]),
             "TEST_INSTALLATION_STATE": self.installation_state,
             "TEST_ZARF": ZARF,
             "TEST_PUBLIC_KEY": str(self.public_key),
@@ -171,7 +173,7 @@ class BootstrapCacheTests(unittest.TestCase):
         shutil.copy2(self.public_key, temp / "trop-release.pub")
         code = (
             'source "$TEST_BOOTSTRAP"; '
-            'RELEASE="$TEST_RELEASE"; BACKEND="$TEST_BACKEND"; DESTINATION="$PWD/cache"; '
+            'RELEASE="$TEST_RELEASE"; DESTINATION="$PWD/cache"; '
             'TEMP_DIRECTORY="$TEST_VERIFY_TEMP"; ZARF_BIN="$TEST_ZARF"; '
             'verify_cached_destination "$TEST_ARCH"'
         )
@@ -180,7 +182,7 @@ class BootstrapCacheTests(unittest.TestCase):
             env={**self.environment(), "TEST_VERIFY_TEMP": str(temp)},
         )
 
-    def main_code(self, *, auto_install, arguments='--release "$TEST_RELEASE" --dest cache --backend "$TEST_BACKEND"'):
+    def main_code(self, *, auto_install, arguments='--release "$TEST_RELEASE" --dest cache'):
         return (
             'source "$TEST_BOOTSTRAP"; '
             'install_zarf() { ZARF_BIN="$TEST_ZARF"; }; '
@@ -374,7 +376,7 @@ class BootstrapCacheTests(unittest.TestCase):
         self.installation_state = "installed"
         return directory / package.name
 
-    def test_installed_go_is_retained_without_backend_flag(self):
+    def test_go_entrypoint_updates_installed_go_without_setup(self):
         self.enable_go_cache()
         self.installed_fixture("go")
         target = self.system / "releases" / RELEASE
@@ -391,10 +393,11 @@ class BootstrapCacheTests(unittest.TestCase):
         self.assertIn("zarf-package-trop-platform-go-", output)
         self.assertEqual(self.installer_log.read_text().splitlines(), ["update"])
 
-    def test_installed_python_rejects_explicit_go_before_installer(self):
+    def test_go_entrypoint_rejects_python_before_installer(self):
+        self.backend = "go"
         self.installed_fixture("python")
-        for arguments in ('--release "$TEST_RELEASE" --backend go',
-                          '--release "$TEST_RELEASE" --backend go --fetch-only'):
+        for arguments in ('--release "$TEST_RELEASE"',
+                          '--release "$TEST_RELEASE" --fetch-only'):
             with self.subTest(arguments=arguments):
                 code = self.main_code(auto_install=True, arguments=arguments)
                 status, output = self.run_main_tty(code=code)
@@ -402,7 +405,7 @@ class BootstrapCacheTests(unittest.TestCase):
                 self.assertIn("requires a separate migration", output)
                 self.assertFalse(self.installer_log.exists(), output)
 
-    def test_installed_python_keeps_legacy_upgrade_without_backend_flag(self):
+    def test_python_entrypoint_keeps_legacy_upgrade_without_setup(self):
         self.installed_fixture("python")
         shutil.copytree(self.cache, self.system / "releases" / RELEASE)
         code = self.main_code(auto_install=True, arguments='--release "$TEST_RELEASE"')
@@ -410,6 +413,13 @@ class BootstrapCacheTests(unittest.TestCase):
         self.assertEqual(status, 0, output)
         self.assertIn("Keeping the installed variant: python", output)
         self.assertEqual(self.installer_log.read_text().splitlines(), ["update"])
+
+    def test_python_entrypoint_rejects_installed_go(self):
+        self.installed_fixture("go")
+        status, output = self.run_main_tty(code=self.main_code(auto_install=True))
+        self.assertNotEqual(status, 0, output)
+        self.assertIn("requires a separate migration", output)
+        self.assertFalse(self.installer_log.exists(), output)
 
     def test_corrupt_active_package_blocks_backend_detection(self):
         package = self.installed_fixture("go")
@@ -422,20 +432,25 @@ class BootstrapCacheTests(unittest.TestCase):
     def test_go_fetch_only_prints_setup_go_without_execution(self):
         self.enable_go_cache()
         self.installed_fixture("python")
-        code = self.main_code(auto_install=False, arguments='--release "$TEST_RELEASE" --dest cache --backend go --fetch-only')
+        code = self.main_code(auto_install=False, arguments='--release "$TEST_RELEASE" --dest cache --fetch-only')
         status, output = self.run_main_tty(code=code)
         self.assertEqual(status, 0, output)
         self.assertIn("trop-install.sh setup-go", output)
         self.assertIn("zarf-package-trop-platform-go-", output)
         self.assertFalse(self.installer_log.exists(), output)
 
-    def test_interactive_variant_selection_defaults_to_python_and_offers_go(self):
-        code = 'source "$TEST_BOOTSTRAP"; select_backend "$TEST_ARCH"; printf "selected=%s\\n" "$BACKEND"'
-        for answer, expected in ((b"\n", "python"), (b"2\n", "go"), (b"invalid\n2\n", "go")):
-            with self.subTest(answer=answer):
-                status, output = self.run_main_tty(code=code, input_bytes=answer)
-                self.assertEqual(status, 0, output)
-                self.assertIn(f"selected={expected}", output)
+    def test_both_entrypoints_are_standalone_and_fixed_even_when_renamed(self):
+        for backend in ("python", "go"):
+            with self.subTest(backend=backend):
+                renamed = self.work / f"renamed-{backend}.sh"
+                shutil.copy2(ROOT / ("trop-bootstrap-go.sh" if backend == "go" else "trop-bootstrap.sh"), renamed)
+                result = run([BASH, str(renamed), "--help"])
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"This launcher installs {backend}", result.stdout)
+                self.assertNotIn("--backend", result.stdout)
+                result = run([BASH, str(renamed), "--backend", "go"])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unknown argument", result.stderr)
 
     def test_pull_requests_the_go_repository_and_checks_real_signed_identity(self):
         self.enable_go_cache()
@@ -457,7 +472,7 @@ class BootstrapCacheTests(unittest.TestCase):
         env = {**self.environment(), "TEST_PULL_DEST": str(destination),
                "TEST_GO_PACKAGE": str(self.cache / f"zarf-package-trop-platform-go-{ARCH}-{RELEASE}.tar.zst"),
                "TEST_VERIFY_TEMP": str(verification)}
-        code = ('source "$TEST_BOOTSTRAP"; BACKEND=go; RELEASE="$TEST_RELEASE"; '
+        code = ('source "$TEST_BOOTSTRAP"; RELEASE="$TEST_RELEASE"; '
                 'ZARF_BIN="$TEST_ZARF"; TEMP_DIRECTORY="$TEST_VERIFY_TEMP"; '
                 'REGISTRY_AUTH_DIRECTORY="$TEST_VERIFY_TEMP"; '
                 'pull_platform_package "$TEST_ARCH" "$TEST_PULL_DEST"')
@@ -467,14 +482,15 @@ class BootstrapCacheTests(unittest.TestCase):
 
 
 class BootstrapDiscoveryTests(unittest.TestCase):
-    def shell(self, code):
+    def shell(self, code, backend="python"):
+        launcher = ROOT / ("trop-bootstrap-go.sh" if backend == "go" else "trop-bootstrap.sh")
         return run([BASH, "-c", 'source "$TEST_BOOTSTRAP"; ' + code],
-                   env={**os.environ, "TEST_BOOTSTRAP": str(BOOTSTRAP)})
+                   env={**os.environ, "TEST_BOOTSTRAP": str(launcher)})
 
     def test_backend_discovery_intersects_only_matching_complete_stable_tags(self):
         for backend, expected in (("python", "r70-20260925"), ("go", "r69-20260924")):
             with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
-                code = f'BACKEND={backend}; TEMP_DIRECTORY="{directory}"; ' + '''
+                code = f'TEMP_DIRECTORY="{directory}"; ' + '''
 registry_tags() {
   case "$1" in
     */trop-bootstrap) printf '%s' '{"tags":["r69-20260924","r70-20260925"]}' ;;
@@ -484,30 +500,39 @@ registry_tags() {
   esac
 }; discover_releases amd64; printf 'latest=%s\\n%s\\n' "$LATEST_RELEASE" "$AVAILABLE_RELEASES"
 '''
-                result = self.shell(code)
+                result = self.shell(code, backend)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(result.stdout.strip(), f"latest={expected}\n{expected}")
 
     def test_missing_go_release_never_falls_back_to_python(self):
         with tempfile.TemporaryDirectory() as directory:
-            result = self.shell(f'BACKEND=go; TEMP_DIRECTORY="{directory}"; ' + '''
+            result = self.shell(f'TEMP_DIRECTORY="{directory}"; ' + '''
 registry_tags() {
   if [[ "$1" == */trop-platform-go ]]; then printf '%s' '{"tags":[]}';
   else printf '%s' '{"tags":["r70-20260925"]}'; fi
 }; discover_releases amd64
-''')
+''', 'go')
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("no complete stable go releases", result.stderr)
 
-    def test_invalid_variant_and_python_import_into_go_stop_before_setup(self):
-        for code, error in (
-            ('parse_arguments --backend invalid', '--backend must be python or go'),
-            ('active_system_release() { :; }; parse_arguments --backend go --config old.yaml; select_backend amd64', 'imports Python configurations only'),
-        ):
-            with self.subTest(code=code):
-                result = self.shell(code)
-                self.assertNotEqual(result.returncode, 0, result.stdout)
-                self.assertIn(error, result.stderr)
+    def test_python_import_into_go_stops_before_setup(self):
+        result = self.shell(
+            'active_system_release() { :; }; parse_arguments --config old.yaml; validate_installed_backend amd64',
+            'go',
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("imports Python configurations only", result.stderr)
+
+    def test_launcher_update_advice_uses_its_own_release_asset(self):
+        for backend, asset in (("python", "trop-bootstrap"), ("go", "trop-bootstrap-go")):
+            with self.subTest(backend=backend):
+                result = self.shell(
+                    "curl() { printf '%s' 'https://github.com/defencebay/trop-bootstrap/releases/tag/v99.0.0'; }; check_for_bootstrap_update",
+                    backend,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"/download/{asset} ", result.stdout)
+                self.assertIn(f"./{asset}.new", result.stdout)
 
 
 if __name__ == "__main__":

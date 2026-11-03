@@ -3,6 +3,8 @@
 set -euo pipefail
 
 readonly TROP_BOOTSTRAP_VERSION="0.5.0"
+readonly BACKEND="python"
+readonly LAUNCHER_NAME="trop-bootstrap"
 # Bootstrap protocol v3 always uses this pinned client. The signed private
 # package carries the release-specific Zarf runtime used for platform pulls.
 readonly ZARF_VERSION="v0.70.1"
@@ -14,7 +16,6 @@ readonly SYSTEM_ENCRYPTED_CONFIG_FILE="/etc/trop/zarf-config.enc.yaml"
 readonly BOOTSTRAP_LATEST_URL="https://github.com/defencebay/trop-bootstrap/releases/latest"
 
 RELEASE=""
-BACKEND=""
 DESTINATION=""
 TOKEN_STDIN="false"
 FETCH_ONLY="false"
@@ -58,14 +59,13 @@ cleanup() {
 }
 
 usage() {
+  printf 'Usage: ./%s [--release RELEASE] [options]\n' "$LAUNCHER_NAME"
+  printf 'This launcher installs %s. Use the matching launcher for upgrades.\n' "$BACKEND"
   cat <<'EOF'
-Usage: ./trop-bootstrap [--release RELEASE] [options]
-
 Run without arguments in a terminal to open the guided installer.
 
 Options:
   --release RELEASE  Immutable release tag, or 'latest'
-  --backend VARIANT  python or go (fresh default: python; upgrades retain their variant)
   --list-releases    List stable releases available to this token and exit
   --dest DIRECTORY   Verified release-assets directory (default: /opt/trop/releases/RELEASE)
   --config FILE      Import plaintext config from an earlier home-directory install
@@ -151,10 +151,10 @@ It is recommended to restart with the current public launcher before downloading
 a private TROP release:
 
   curl --proto '=https' --tlsv1.2 -fL \
-    https://github.com/defencebay/trop-bootstrap/releases/latest/download/trop-bootstrap \
-    -o trop-bootstrap.new
-  chmod +x trop-bootstrap.new
-  ./trop-bootstrap.new
+    https://github.com/defencebay/trop-bootstrap/releases/latest/download/$LAUNCHER_NAME \
+    -o $LAUNCHER_NAME.new
+  chmod +x $LAUNCHER_NAME.new
+  ./$LAUNCHER_NAME.new
 
 Continuing now still uses the immutable, signed release selected below.
 
@@ -198,8 +198,8 @@ setup_action() {
   if [[ "$BACKEND" == "go" ]]; then printf 'setup-go\n'; else printf 'setup\n'; fi
 }
 
-select_backend() {
-  local architecture="$1" active installed="" identity choice
+validate_installed_backend() {
+  local architecture="$1" active installed="" identity
   active="$(active_system_release)"
   if [[ -n "$active" ]]; then
     shopt -s nullglob
@@ -212,31 +212,13 @@ select_backend() {
       "trop-platform-go|$active|$architecture") installed=go ;;
       *) die "active signed package identity does not match the installed release and architecture" ;;
     esac
-    if [[ -n "$BACKEND" && "$BACKEND" != "$installed" ]]; then
+    if [[ "$BACKEND" != "$installed" ]]; then
       [[ "$FETCH_ONLY" == true && -n "$DESTINATION" && "$DESTINATION" != "$INSTALL_ROOT/releases/"* ]] ||
         die "installed variant is $installed; changing it to $BACKEND requires a separate migration, not an upgrade. To stage a download, use --fetch-only with a separate --dest directory"
     else
-      BACKEND="$installed"
       info "Keeping the installed variant: $BACKEND"
     fi
   fi
-  if [[ -z "$BACKEND" && "$TOKEN_STDIN" != "true" && -t 0 ]]; then
-    while true; do
-      cat <<'EOF'
-
-Choose the TROP version:
-  1. Python (current default)
-  2. Go (new version, includes TROP-ID; no AI or Crisis)
-EOF
-      prompt_value "TROP version" "1" choice
-      case "$choice" in
-        1) BACKEND=python; break ;;
-        2) BACKEND=go; break ;;
-        *) printf 'Please choose 1 or 2.\n' ;;
-      esac
-    done
-  fi
-  BACKEND="${BACKEND:-python}"
   [[ "$BACKEND" != "go" || -z "$EXISTING_CONFIG" ]] ||
     die "--config imports Python configurations only; Go requires a fresh installation"
 }
@@ -871,7 +853,6 @@ parse_arguments() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --release) [[ $# -ge 2 ]] || die "--release requires a value"; RELEASE="$2"; shift 2 ;;
-      --backend) [[ $# -ge 2 ]] || die "--backend requires a value"; BACKEND="$2"; [[ "$BACKEND" == python || "$BACKEND" == go ]] || die "--backend must be python or go"; shift 2 ;;
       --list-releases) LIST_RELEASES="true"; shift ;;
       --dest) [[ $# -ge 2 ]] || die "--dest requires a value"; DESTINATION="$2"; shift 2 ;;
       --config) [[ $# -ge 2 ]] || die "--config requires a value"; EXISTING_CONFIG="$2"; shift 2 ;;
@@ -913,7 +894,7 @@ main() {
   TEMP_DIRECTORY="$(mktemp -d)"
   install_zarf "$architecture"
   write_release_key
-  select_backend "$architecture"
+  validate_installed_backend "$architecture"
   if [[ -z "$RELEASE" && "$LIST_RELEASES" != "true" ]]; then
     [[ -t 0 ]] || die "--release is required when standard input is not a terminal"
     guided="true"
