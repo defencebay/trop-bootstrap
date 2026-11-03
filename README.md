@@ -19,6 +19,7 @@ chmod +x trop-bootstrap
 ```
 
 ```text
+TROP version [1]: 1                 # 1 Python (default); 2 Go
 TROP token: [hidden input]
 TROP release tag [latest stable]: [Enter]
 Verified release-assets directory [/opt/trop/releases/<release>]: [Enter]
@@ -51,6 +52,41 @@ profile changes require a new signed release, not a launcher code change. Check 
 assuming an older downloaded release has the new profile.
 
 The wizard asks for host integrations separately; review its plan. `install-validate` prompts for administrator credentials. Configure DNS for other LAN clients separately.
+
+### Python and Go
+
+The launcher offers Python and Go before listing releases. Python remains the
+default for fresh installs. Go includes native TOC, TROP-ID, TAK bridge,
+PostgreSQL, XMPP and media; AI and Crisis are excluded. Each version has its own
+application package and release list. Selecting Go never substitutes a Python
+release if no complete Go release is published for the host architecture.
+
+To select a version explicitly or download its complete bundle:
+
+```bash
+./trop-bootstrap --backend go
+./trop-bootstrap --backend go --release latest --fetch-only
+./trop-bootstrap --backend python --list-releases
+```
+
+Go needs a fresh host/configuration. The launcher invokes `setup-go`, then
+deploys the signed `trop-platform-go` package. Go setup leaves hosts-file changes,
+system CA trust and global operator tools disabled; qualify these integrations
+separately before using the Python-oriented `trop`/doctor examples below for Go.
+Use the verified release's `trop-install.sh` commands for Go maintenance.
+
+On a managed installed host, the launcher verifies the active signed application
+package and retains its Python or Go version for upgrade discovery. It reuses the
+existing configuration and runs `update` rather than setup. Changing versions
+is a separate migration and is rejected by the upgrade path. `--config` imports
+legacy Python configuration only. For staging another version's bundle on an
+installed host, use `--fetch-only` with an explicit `--backend` and `--dest`.
+
+This requires both the updated launcher and a matching signed private release;
+downloading the launcher alone does not publish Go releases or qualify ARM64,
+backup/restore or client interoperability. See the
+[backend guide](https://github.com/defencebay/trop-infra/blob/master/docs/standalone-backends.md)
+for qualification and migration limits.
 
 ```text
 ./trop-bootstrap                        public launcher, before install

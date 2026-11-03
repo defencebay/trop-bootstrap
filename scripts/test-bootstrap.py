@@ -22,6 +22,7 @@ ARCH = "arm64" if os.uname().machine in ("aarch64", "arm64") else "amd64"
 OTHER_ARCH = "amd64" if ARCH == "arm64" else "arm64"
 ZARF = shutil.which("zarf")
 COSIGN = shutil.which("cosign")
+BASH = shutil.which("bash")
 
 
 def run(command, *, cwd=None, env=None):
@@ -65,10 +66,24 @@ class BootstrapCacheTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="trop-bootstrap-test-")
         self.addCleanup(self.temp.cleanup)
-        self.work = pathlib.Path(self.temp.name)
+        self.work = pathlib.Path(self.temp.name).resolve()
         self.cache = self.work / "cache"
         self.cache.mkdir()
         self.installer_log = self.work / "installer.log"
+        self.backend = "python"
+        self.installation_state = "fresh"
+        self.system = self.work / "system"
+        self.config = self.work / "config.yaml"
+        self.bootstrap = self.work / "bootstrap.sh"
+        self.bootstrap.write_text(BOOTSTRAP.read_text().replace(
+            'readonly INSTALL_ROOT="/opt/trop"', f'readonly INSTALL_ROOT="{self.system}"'
+        ).replace(
+            'readonly SYSTEM_CONFIG_FILE="/etc/trop/zarf-config.yaml"',
+            f'readonly SYSTEM_CONFIG_FILE="{self.config}"'
+        ).replace(
+            'readonly SYSTEM_ENCRYPTED_CONFIG_FILE="/etc/trop/zarf-config.enc.yaml"',
+            f'readonly SYSTEM_ENCRYPTED_CONFIG_FILE="{self.work / "config.enc.yaml"}"'
+        ))
         self.make_cache()
 
     def make_package(self, name, version, architecture, documentation=None, *, signer=None):
@@ -110,7 +125,8 @@ class BootstrapCacheTests(unittest.TestCase):
             "#!/usr/bin/env bash\n"
             "set -eu\n"
             "case \"${1:-}\" in\n"
-            "  setup) ;;\n"
+            "  setup|setup-go) ;;\n"
+            "  installation-state) printf '%s\\n' \"${TEST_INSTALLATION_STATE:-fresh}\"; exit 0 ;;\n"
             "  deploy|update) [ -f \"${2:-}\" ] || exit 21 ;;\n"
             "  *) exit 22 ;;\n"
             "esac\n"
@@ -140,7 +156,9 @@ class BootstrapCacheTests(unittest.TestCase):
     def environment(self):
         return {
             **os.environ,
-            "TEST_BOOTSTRAP": str(BOOTSTRAP),
+            "TEST_BOOTSTRAP": str(self.bootstrap),
+            "TEST_BACKEND": self.backend,
+            "TEST_INSTALLATION_STATE": self.installation_state,
             "TEST_ZARF": ZARF,
             "TEST_PUBLIC_KEY": str(self.public_key),
             "TEST_RELEASE": RELEASE,
@@ -153,7 +171,7 @@ class BootstrapCacheTests(unittest.TestCase):
         shutil.copy2(self.public_key, temp / "trop-release.pub")
         code = (
             'source "$TEST_BOOTSTRAP"; '
-            'RELEASE="$TEST_RELEASE"; DESTINATION="$PWD/cache"; '
+            'RELEASE="$TEST_RELEASE"; BACKEND="$TEST_BACKEND"; DESTINATION="$PWD/cache"; '
             'TEMP_DIRECTORY="$TEST_VERIFY_TEMP"; ZARF_BIN="$TEST_ZARF"; '
             'verify_cached_destination "$TEST_ARCH"'
         )
@@ -162,21 +180,22 @@ class BootstrapCacheTests(unittest.TestCase):
             env={**self.environment(), "TEST_VERIFY_TEMP": str(temp)},
         )
 
-    def main_code(self, *, auto_install):
+    def main_code(self, *, auto_install, arguments='--release "$TEST_RELEASE" --dest cache --backend "$TEST_BACKEND"'):
         return (
             'source "$TEST_BOOTSTRAP"; '
             'install_zarf() { ZARF_BIN="$TEST_ZARF"; }; '
             'write_release_key() { cp "$TEST_PUBLIC_KEY" "$TEMP_DIRECTORY/trop-release.pub"; }; '
+            'run_as_root() { "$@"; }; '
             f'INSTALL_AFTER_FETCH={"true" if auto_install else ""}; '
-            'main --release "$TEST_RELEASE" --dest cache'
+            f'main {arguments}'
         )
 
-    def run_main_tty(self, *, auto_install, input_bytes=b""):
-        code = self.main_code(auto_install=auto_install)
+    def run_main_tty(self, *, auto_install=False, input_bytes=b"", code=None):
+        code = code or self.main_code(auto_install=auto_install)
         pid, terminal = pty.fork()
         if pid == 0:
             os.chdir(self.work)
-            os.execve("/bin/bash", ["bash", "-c", code], self.environment())
+            os.execve(BASH, [BASH, "-c", code], self.environment())
         if input_bytes:
             os.write(terminal, input_bytes)
         output = bytearray()
@@ -318,6 +337,168 @@ class BootstrapCacheTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertIn("Resume later", output)
         self.assertFalse(self.installer_log.exists(), output)
+
+    def enable_go_cache(self):
+        self.backend = "go"
+        package = self.make_package("trop-platform-go", RELEASE, ARCH)
+        shutil.copy2(package, self.cache / package.name)
+
+    def test_go_cache_uses_setup_go_and_matching_signed_package(self):
+        self.enable_go_cache()
+        result = self.verify_cache()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        code, output = self.run_main_tty(auto_install=True)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.installer_log.read_text().splitlines(), ["setup-go", "deploy"])
+
+    def test_renamed_python_package_is_rejected_for_go(self):
+        self.enable_go_cache()
+        shutil.copy2(
+            self.cache / f"zarf-package-trop-platform-{ARCH}-{RELEASE}.tar.zst",
+            self.cache / f"zarf-package-trop-platform-go-{ARCH}-{RELEASE}.tar.zst",
+        )
+        code, output = self.run_main_tty(auto_install=True)
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("identity mismatch", output)
+        self.assertFalse(self.installer_log.exists(), output)
+
+    def installed_fixture(self, backend):
+        active = "r68-20260923"
+        name = "trop-platform-go" if backend == "go" else "trop-platform"
+        package = self.make_package(name, active, ARCH)
+        directory = self.system / "releases" / active
+        directory.mkdir(parents=True)
+        shutil.copy2(package, directory / package.name)
+        (self.system / "current").symlink_to(directory)
+        self.config.write_text("package: {}\n")
+        self.installation_state = "installed"
+        return directory / package.name
+
+    def test_installed_go_is_retained_without_backend_flag(self):
+        self.enable_go_cache()
+        self.installed_fixture("go")
+        target = self.system / "releases" / RELEASE
+        shutil.copytree(self.cache, target)
+        code = self.main_code(auto_install=True, arguments='--release "$TEST_RELEASE"')
+        status, output = self.run_main_tty(code=code)
+        self.assertEqual(status, 0, output)
+        self.assertIn("Keeping the installed variant: go", output)
+        self.assertEqual(self.installer_log.read_text().splitlines(), ["update"])
+
+    def test_installed_python_rejects_explicit_go_before_installer(self):
+        self.installed_fixture("python")
+        code = self.main_code(auto_install=True, arguments='--release "$TEST_RELEASE" --backend go')
+        status, output = self.run_main_tty(code=code)
+        self.assertNotEqual(status, 0, output)
+        self.assertIn("requires a separate migration", output)
+        self.assertFalse(self.installer_log.exists(), output)
+
+    def test_installed_python_keeps_legacy_upgrade_without_backend_flag(self):
+        self.installed_fixture("python")
+        shutil.copytree(self.cache, self.system / "releases" / RELEASE)
+        code = self.main_code(auto_install=True, arguments='--release "$TEST_RELEASE"')
+        status, output = self.run_main_tty(code=code)
+        self.assertEqual(status, 0, output)
+        self.assertIn("Keeping the installed variant: python", output)
+        self.assertEqual(self.installer_log.read_text().splitlines(), ["update"])
+
+    def test_corrupt_active_package_blocks_backend_detection(self):
+        package = self.installed_fixture("go")
+        package.write_bytes(b"corrupt package\n")
+        status, output = self.run_main_tty(code=self.main_code(auto_install=True))
+        self.assertNotEqual(status, 0, output)
+        self.assertIn("verification failed", output)
+        self.assertFalse(self.installer_log.exists(), output)
+
+    def test_go_fetch_only_prints_setup_go_without_execution(self):
+        self.enable_go_cache()
+        self.installed_fixture("python")
+        code = self.main_code(auto_install=False, arguments='--release "$TEST_RELEASE" --dest cache --backend go --fetch-only')
+        status, output = self.run_main_tty(code=code)
+        self.assertEqual(status, 0, output)
+        self.assertIn("trop-install.sh setup-go", output)
+        self.assertIn("zarf-package-trop-platform-go-", output)
+        self.assertFalse(self.installer_log.exists(), output)
+
+    def test_interactive_variant_selection_defaults_to_python_and_offers_go(self):
+        code = 'source "$TEST_BOOTSTRAP"; select_backend "$TEST_ARCH"; printf "selected=%s\\n" "$BACKEND"'
+        for answer, expected in ((b"\n", "python"), (b"2\n", "go"), (b"invalid\n2\n", "go")):
+            with self.subTest(answer=answer):
+                status, output = self.run_main_tty(code=code, input_bytes=answer)
+                self.assertEqual(status, 0, output)
+                self.assertIn(f"selected={expected}", output)
+
+    def test_pull_requests_the_go_repository_and_checks_real_signed_identity(self):
+        self.enable_go_cache()
+        runtime = self.cache / f"zarf_v0.70.1_Linux_{ARCH}"
+        runtime.write_text(
+            '#!/usr/bin/env bash\nset -eu\n'
+            '[[ "$1" == package && "$2" == pull ]]\n'
+            '[[ "$3" == "oci://registry.trop.defencebay.com/trop-releases/$TEST_ARCH/trop-platform-go:$TEST_RELEASE" ]]\n'
+            '[[ "$*" == *"--verify"* ]]\n'
+            'cp "$TEST_GO_PACKAGE" "$TEST_PULL_DEST/"\n'
+        )
+        destination = self.work / "pull"
+        destination.mkdir()
+        shutil.copy2(runtime, destination / runtime.name)
+        shutil.copy2(self.public_key, destination / "trop-release.pub")
+        verification = self.work / "verify"
+        verification.mkdir()
+        shutil.copy2(self.public_key, verification / "trop-release.pub")
+        env = {**self.environment(), "TEST_PULL_DEST": str(destination),
+               "TEST_GO_PACKAGE": str(self.cache / f"zarf-package-trop-platform-go-{ARCH}-{RELEASE}.tar.zst"),
+               "TEST_VERIFY_TEMP": str(verification)}
+        code = ('source "$TEST_BOOTSTRAP"; BACKEND=go; RELEASE="$TEST_RELEASE"; '
+                'ZARF_BIN="$TEST_ZARF"; TEMP_DIRECTORY="$TEST_VERIFY_TEMP"; '
+                'REGISTRY_AUTH_DIRECTORY="$TEST_VERIFY_TEMP"; '
+                'pull_platform_package "$TEST_ARCH" "$TEST_PULL_DEST"')
+        result = run([BASH, "-c", code], env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((destination / pathlib.Path(env["TEST_GO_PACKAGE"]).name).is_file())
+
+
+class BootstrapDiscoveryTests(unittest.TestCase):
+    def shell(self, code):
+        return run([BASH, "-c", 'source "$TEST_BOOTSTRAP"; ' + code],
+                   env={**os.environ, "TEST_BOOTSTRAP": str(BOOTSTRAP)})
+
+    def test_backend_discovery_intersects_only_matching_complete_stable_tags(self):
+        for backend, expected in (("python", "r70-20260925"), ("go", "r69-20260924")):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
+                code = f'BACKEND={backend}; TEMP_DIRECTORY="{directory}"; ' + '''
+registry_tags() {
+  case "$1" in
+    */trop-bootstrap) printf '%s' '{"tags":["r69-20260924","r70-20260925"]}' ;;
+    */trop-platform) printf '%s' '{"tags":["r70-20260925","r71-20260926","latest"]}' ;;
+    */trop-platform-go) printf '%s' '{"tags":["r69-20260924","r72-20260927","preview"]}' ;;
+    *) return 1 ;;
+  esac
+}; discover_releases amd64; printf 'latest=%s\\n%s\\n' "$LATEST_RELEASE" "$AVAILABLE_RELEASES"
+'''
+                result = self.shell(code)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.strip(), f"latest={expected}\n{expected}")
+
+    def test_missing_go_release_never_falls_back_to_python(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.shell(f'BACKEND=go; TEMP_DIRECTORY="{directory}"; ' + '''
+registry_tags() {
+  if [[ "$1" == */trop-platform-go ]]; then printf '%s' '{"tags":[]}';
+  else printf '%s' '{"tags":["r70-20260925"]}'; fi
+}; discover_releases amd64
+''')
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("no complete stable go releases", result.stderr)
+
+    def test_invalid_variant_and_python_import_into_go_stop_before_setup(self):
+        for code, error in (
+            ('parse_arguments --backend invalid', '--backend must be python or go'),
+            ('parse_arguments --backend go --config old.yaml; select_backend amd64', 'imports Python configurations only'),
+        ):
+            with self.subTest(code=code):
+                result = self.shell(code)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(error, result.stderr)
 
 
 if __name__ == "__main__":
