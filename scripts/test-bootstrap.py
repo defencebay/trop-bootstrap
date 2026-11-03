@@ -421,6 +421,44 @@ class BootstrapCacheTests(unittest.TestCase):
         self.assertIn("requires a separate migration", output)
         self.assertFalse(self.installer_log.exists(), output)
 
+    def test_go_rejects_orphan_plaintext_and_encrypted_config_before_installer(self):
+        self.enable_go_cache()
+        shutil.copytree(self.cache, self.system / "releases" / RELEASE)
+        for config in (self.config, self.work / "config.enc.yaml"):
+            with self.subTest(config=config.name):
+                config.write_text("retained existing configuration\n")
+                before = config.read_bytes()
+                code = self.main_code(auto_install=True, arguments='--release "$TEST_RELEASE"')
+                status, output = self.run_main_tty(code=code)
+                self.assertNotEqual(status, 0, output)
+                self.assertIn("verified active Go release", output)
+                self.assertEqual(config.read_bytes(), before)
+                self.assertFalse(self.installer_log.exists(), output)
+                config.unlink()
+
+    def list_on_other_backend(self, installed):
+        self.installed_fixture(installed)
+        code = '''source "$TEST_BOOTSTRAP";
+install_zarf() { die 'Listing must not download Zarf'; };
+write_release_key() { die 'Listing must not inspect signed packages'; };
+run_as_root() { die 'Listing must not execute privileged commands'; };
+ensure_credential() { :; };
+registry_tags() { printf '%s' '{"tags":["r69-20260924"]}'; };
+main --list-releases
+'''
+        status, output = self.run_main_tty(code=code)
+        self.assertEqual(status, 0, output)
+        self.assertIn(f"TROP {self.backend} releases", output)
+        self.assertIn(RELEASE, output)
+        self.assertFalse(self.installer_log.exists(), output)
+
+    def test_go_lists_releases_on_python_without_zarf_or_installer(self):
+        self.backend = "go"
+        self.list_on_other_backend("python")
+
+    def test_python_lists_releases_on_go_without_zarf_or_installer(self):
+        self.list_on_other_backend("go")
+
     def test_corrupt_active_package_blocks_backend_detection(self):
         package = self.installed_fixture("go")
         package.write_bytes(b"corrupt package\n")

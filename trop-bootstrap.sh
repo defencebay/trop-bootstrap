@@ -218,6 +218,8 @@ validate_installed_backend() {
     else
       info "Keeping the installed variant: $BACKEND"
     fi
+  elif [[ "$BACKEND" == go && "$FETCH_ONLY" != true ]] && system_config_exists; then
+    die "Go requires a fresh configuration or a verified active Go release. Existing configuration has no active release; inspect or restore that installation before continuing."
   fi
   [[ "$BACKEND" != "go" || -z "$EXISTING_CONFIG" ]] ||
     die "--config imports Python configurations only; Go requires a fresh installation"
@@ -892,9 +894,11 @@ main() {
   done
   architecture="$(detect_architecture)"
   TEMP_DIRECTORY="$(mktemp -d)"
-  install_zarf "$architecture"
-  write_release_key
-  validate_installed_backend "$architecture"
+  if [[ "$LIST_RELEASES" != true ]]; then
+    install_zarf "$architecture"
+    write_release_key
+    validate_installed_backend "$architecture"
+  fi
   if [[ -z "$RELEASE" && "$LIST_RELEASES" != "true" ]]; then
     [[ -t 0 ]] || die "--release is required when standard input is not a terminal"
     guided="true"
