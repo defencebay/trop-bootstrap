@@ -52,6 +52,62 @@ assuming an older downloaded release has the new profile.
 
 The wizard asks for host integrations separately; review its plan. `install-validate` prompts for administrator credentials. Configure DNS for other LAN clients separately.
 
+### Python and Go
+
+There are two self-contained launcher files:
+
+- `trop-bootstrap.sh` (release asset `trop-bootstrap`) installs and updates Python.
+- `trop-bootstrap-go.sh` (release asset `trop-bootstrap-go`) installs and updates Go.
+
+The existing Python download command stays unchanged. Go commands require a
+published launcher release version 0.5.0 or later whose assets actually include
+`trop-bootstrap-go`, plus a matching private Go release. Check release assets;
+do not assume the current `latest` contains the Go file. For such a release:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fL \
+  https://github.com/defencebay/trop-bootstrap/releases/latest/download/trop-bootstrap-go \
+  -o trop-bootstrap-go
+chmod +x trop-bootstrap-go
+./trop-bootstrap-go
+```
+
+Each launcher has a fixed backend, its own application package and release list.
+Read-only `--list-releases` works even when the host runs the other backend,
+without downloading Zarf or inspecting the installed application package.
+There is no Python/Go menu or `--backend` flag. For a download checkpoint or a
+release listing, use the corresponding file:
+
+```bash
+./trop-bootstrap-go --release latest --fetch-only
+./trop-bootstrap --list-releases
+```
+
+Go includes native TOC, TROP-ID, TAK bridge, PostgreSQL, XMPP and media; AI and
+Crisis are excluded. It needs a fresh host/configuration. Its launcher invokes
+`setup-go`, then deploys the signed `trop-platform-go` package. It never substitutes
+a Python release if no complete Go release exists for the architecture.
+
+Go setup leaves hosts-file changes, system CA trust and global operator tools
+disabled; qualify these integrations separately before using the Python-oriented
+`trop`/doctor examples below for Go. Use the verified release's `trop-install.sh`
+commands for Go maintenance, and `trop-bootstrap-go` for its next signed release.
+
+On a managed installed host, each launcher verifies the active signed application
+package and checks that it matches its own backend. The matching launcher reuses
+configuration and runs `update` rather than setup. The other launcher refuses to
+switch the installed backend; that needs a separate migration. `--config` imports
+legacy Python configuration only. Existing system configuration without a
+verified active Go release stops the Go launcher before installer execution;
+inspect/recover partial state instead of rerunning setup. To stage another backend on an installed host,
+use its launcher with `--fetch-only` and a separate `--dest` outside managed releases.
+
+This requires both the updated launcher and a matching signed private release;
+downloading the launcher alone does not publish Go releases or qualify ARM64,
+backup/restore or client interoperability. See the
+[backend guide](https://github.com/defencebay/trop-infra/blob/master/docs/standalone-backends.md)
+for qualification and migration limits.
+
 ```text
 ./trop-bootstrap                        public launcher, before install
 /opt/trop/releases/<release>/           verified bundle after download

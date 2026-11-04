@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
-readonly TROP_BOOTSTRAP_VERSION="0.4.2"
+readonly TROP_BOOTSTRAP_VERSION="0.5.0"
+readonly BACKEND="python"
+readonly LAUNCHER_NAME="trop-bootstrap"
 # Bootstrap protocol v3 always uses this pinned client. The signed private
 # package carries the release-specific Zarf runtime used for platform pulls.
 readonly ZARF_VERSION="v0.70.1"
@@ -57,9 +59,9 @@ cleanup() {
 }
 
 usage() {
+  printf 'Usage: ./%s [--release RELEASE] [options]\n' "$LAUNCHER_NAME"
+  printf 'This launcher installs %s. Use the matching launcher for upgrades.\n' "$BACKEND"
   cat <<'EOF'
-Usage: ./trop-bootstrap [--release RELEASE] [options]
-
 Run without arguments in a terminal to open the guided installer.
 
 Options:
@@ -86,8 +88,9 @@ intact. With the recommended /opt/trop/releases/RELEASE destination, configurati
 and secrets live separately under /etc/trop. A custom destination is an
 operator-owned download/checkpoint directory and keeps its config locally.
 
-Before deploy, the guided installer records explicit true/false consent for
+For Python, the guided installer records explicit true/false consent for
 /etc/hosts management, system CA trust, and global /usr/local operator tools.
+Go starts with these optional host integrations disabled.
 False—or a missing flag in an imported legacy config—means no change to that
 host integration. Required k3s/Zarf and TROP workload effects are shown
 separately before deployment.
@@ -148,10 +151,10 @@ It is recommended to restart with the current public launcher before downloading
 a private TROP release:
 
   curl --proto '=https' --tlsv1.2 -fL \
-    https://github.com/defencebay/trop-bootstrap/releases/latest/download/trop-bootstrap \
-    -o trop-bootstrap.new
-  chmod +x trop-bootstrap.new
-  ./trop-bootstrap.new
+    https://github.com/defencebay/trop-bootstrap/releases/latest/download/$LAUNCHER_NAME \
+    -o $LAUNCHER_NAME.new
+  chmod +x $LAUNCHER_NAME.new
+  ./$LAUNCHER_NAME.new
 
 Continuing now still uses the immutable, signed release selected below.
 
@@ -167,8 +170,8 @@ This wizard downloads a signed TROP release and can install it on this computer.
 Press Enter to accept a recommended value. No token or password is shown in the
 review screen or written to shell history.
 
-Before deployment, the release installer asks for explicit true/false consent
-for each optional host integration:
+For Python, the release installer asks for explicit true/false consent for each
+optional host integration; Go starts with all three disabled:
   - maintaining a marked TROP block in /etc/hosts;
   - adding the TROP CA to the system certificate trust store;
   - installing or replacing TROP-owned global trop, trop-doctor, and trop-install
@@ -187,10 +190,45 @@ release is verified and the reviews are accepted.
 EOF
 }
 
+platform_name() {
+  if [[ "$BACKEND" == "go" ]]; then printf 'trop-platform-go\n'; else printf 'trop-platform\n'; fi
+}
+
+setup_action() {
+  if [[ "$BACKEND" == "go" ]]; then printf 'setup-go\n'; else printf 'setup\n'; fi
+}
+
+validate_installed_backend() {
+  local architecture="$1" active installed="" identity
+  active="$(active_system_release)"
+  if [[ -n "$active" ]]; then
+    shopt -s nullglob
+    local packages=("$INSTALL_ROOT/current"/zarf-package-trop-platform*-"$architecture"-"$active".tar.zst)
+    shopt -u nullglob
+    [[ ${#packages[@]} -eq 1 ]] || die "cannot determine the installed variant from its active signed package; inspect the installation before upgrading"
+    identity="$(signed_package_identity "${packages[0]}")"
+    case "$identity" in
+      "trop-platform|$active|$architecture") installed=python ;;
+      "trop-platform-go|$active|$architecture") installed=go ;;
+      *) die "active signed package identity does not match the installed release and architecture" ;;
+    esac
+    if [[ "$BACKEND" != "$installed" ]]; then
+      [[ "$FETCH_ONLY" == true && -n "$DESTINATION" && "$DESTINATION" != "$INSTALL_ROOT/releases/"* ]] ||
+        die "installed variant is $installed; changing it to $BACKEND requires a separate migration, not an upgrade. To stage a download, use --fetch-only with a separate --dest directory"
+    else
+      info "Keeping the installed variant: $BACKEND"
+    fi
+  elif [[ "$BACKEND" == go && "$FETCH_ONLY" != true ]] && system_config_exists; then
+    die "Go requires a fresh configuration or a verified active Go release. Existing configuration has no active release; inspect or restore that installation before continuing."
+  fi
+  [[ "$BACKEND" != "go" || -z "$EXISTING_CONFIG" ]] ||
+    die "--config imports Python configurations only; Go requires a fresh installation"
+}
+
 guided_setup() {
   local architecture="$1" action release
 
-  printf 'Available stable releases for %s:\n' "$architecture"
+  printf 'Available stable %s releases for %s:\n' "$BACKEND" "$architecture"
   print_available_releases 10
   printf '\n'
 
@@ -249,6 +287,7 @@ EOF
   cat <<EOF
 
 Review
+  Version:       $BACKEND
   Release:       $RELEASE
   Current:       ${ACTIVE_RELEASE:-not installed}
   Architecture:  $architecture
@@ -257,9 +296,12 @@ Review
   Action:        $(if [[ "$INSTALL_AFTER_FETCH" == "true" ]]; then printf 'download and install'; else printf 'download only'; fi)
 
 The release and its signatures will be verified before any installation starts.
-If installation is selected, the next setup wizard asks separately for explicit
-true/false consent to /etc/hosts, system CA trust, and global operator commands.
 EOF
+  if [[ "$BACKEND" == go ]]; then
+    printf 'Go setup leaves /etc/hosts, system CA trust and global operator commands disabled.\n'
+  else
+    printf 'Python setup asks separately for consent to /etc/hosts, system CA trust and global operator commands.\n'
+  fi
   confirm_default_yes "Continue?" || { info "No changes were made"; exit 0; }
 }
 
@@ -290,6 +332,9 @@ validate_release_transition() {
   local current_sequence target_sequence
   ACTIVE_RELEASE="$(active_system_release)"
   [[ -n "$ACTIVE_RELEASE" ]] || return 0
+  if [[ "$FETCH_ONLY" == true ]] && ! is_system_destination; then
+    return 0
+  fi
   is_system_destination || die "an existing system installation must be upgraded in $INSTALL_ROOT/releases/$RELEASE"
   [[ "$RELEASE" != "$ACTIVE_RELEASE" ]] || die "release $RELEASE is already active"
 
@@ -463,8 +508,8 @@ stable_tags_from_json() {
 discover_releases() {
   local architecture="$1" bootstrap_tags platform_tags bootstrap_file platform_file
   bootstrap_tags="$(registry_tags "${HARBOR_PROJECT}/${architecture}/trop-bootstrap" | stable_tags_from_json)"
-  platform_tags="$(registry_tags "${HARBOR_PROJECT}/${architecture}/trop-platform" | stable_tags_from_json)"
-  [[ -n "$bootstrap_tags" && -n "$platform_tags" ]] || die "no complete stable releases are available for $architecture"
+  platform_tags="$(registry_tags "${HARBOR_PROJECT}/${architecture}/$(platform_name)" | stable_tags_from_json)"
+  [[ -n "$bootstrap_tags" && -n "$platform_tags" ]] || die "no complete stable $BACKEND releases are available for $architecture"
 
   bootstrap_file="$TEMP_DIRECTORY/bootstrap-tags"
   platform_file="$TEMP_DIRECTORY/platform-tags"
@@ -474,7 +519,7 @@ discover_releases() {
     awk 'NR == FNR { available[$0] = 1; next } available[$0] { print }' \
       "$bootstrap_file" "$platform_file" | LC_ALL=C sort -Vr
   )"
-  [[ -n "$AVAILABLE_RELEASES" ]] || die "no complete stable releases are available for $architecture"
+  [[ -n "$AVAILABLE_RELEASES" ]] || die "no complete stable $BACKEND releases are available for $architecture"
   LATEST_RELEASE="${AVAILABLE_RELEASES%%$'\n'*}"
 }
 
@@ -550,12 +595,17 @@ verify_bootstrap_assets() {
   chmod +x "$directory/trop-install.sh" "${zarf_files[0]}"
 }
 
-verify_package_identity() {
-  local package="$1" expected_name="$2" expected_architecture="$3" definition identity
+signed_package_identity() {
+  local package="$1" definition
   definition="$("$ZARF_BIN" package inspect definition "$package" \
     --key "$TEMP_DIRECTORY/trop-release.pub" --verify --no-color)" || die "signed package verification failed: $package"
-  identity="$(printf '%s\n' "$definition" | "$ZARF_BIN" tools yq -r \
-    '[.metadata.name, .metadata.version, .metadata.architecture] | join("|")' -)"
+  printf '%s\n' "$definition" | "$ZARF_BIN" tools yq -r \
+    '[.metadata.name, .metadata.version, .metadata.architecture] | join("|")' -
+}
+
+verify_package_identity() {
+  local package="$1" expected_name="$2" expected_architecture="$3" identity
+  identity="$(signed_package_identity "$package")"
   [[ "$identity" == "$expected_name|$RELEASE|$expected_architecture" ]] ||
     die "signed package identity mismatch for $(basename "$package"): expected $expected_name/$RELEASE/$expected_architecture, got $identity"
 }
@@ -650,25 +700,25 @@ verify_cached_destination() {
     [[ -f "$DESTINATION/$(basename "$name")" && ! -L "$DESTINATION/$(basename "$name")" ]] || die "cached release asset is missing or invalid: $(basename "$name")"
     cmp -s "$name" "$DESTINATION/$(basename "$name")" || die "cached release asset differs from signed package: $(basename "$name")"
   done
-  platform="$DESTINATION/zarf-package-trop-platform-${architecture}-${RELEASE}.tar.zst"
+  platform="$DESTINATION/zarf-package-$(platform_name)-${architecture}-${RELEASE}.tar.zst"
   [[ -f "$platform" && ! -L "$platform" ]] || die "cached platform package is missing or invalid: $platform"
-  verify_package_identity "$platform" trop-platform "$architecture"
+  verify_package_identity "$platform" "$(platform_name)" "$architecture"
   info "Verified complete cached release at $DESTINATION"
 }
 
 pull_platform_package() {
   local architecture="$1" destination="$2" zarf_binary package_name package_ref
   zarf_binary="$(find "$destination" -maxdepth 1 -type f -name "zarf_*_Linux_$architecture" -print -quit)"
-  package_name="zarf-package-trop-platform-${architecture}-${RELEASE}.tar.zst"
-  package_ref="oci://${REGISTRY_HOST}/${HARBOR_PROJECT}/${architecture}/trop-platform:${RELEASE}"
-  info "Pulling and verifying the signed TROP platform package"
+  package_name="zarf-package-$(platform_name)-${architecture}-${RELEASE}.tar.zst"
+  package_ref="oci://${REGISTRY_HOST}/${HARBOR_PROJECT}/${architecture}/$(platform_name):${RELEASE}"
+  info "Pulling and verifying the signed TROP $BACKEND package"
   DOCKER_CONFIG="$REGISTRY_AUTH_DIRECTORY" "$zarf_binary" package pull "$package_ref" \
     --architecture "$architecture" \
     --output-directory "$destination" \
     --key "$destination/trop-release.pub" \
     --verify
   [[ -f "$destination/$package_name" ]] || die "Zarf pull did not create $package_name"
-  verify_package_identity "$destination/$package_name" trop-platform "$architecture"
+  verify_package_identity "$destination/$package_name" "$(platform_name)" "$architecture"
 }
 
 publish_destination() {
@@ -708,10 +758,10 @@ print_resume_commands() {
     elif system_config_exists; then
       printf '  # Reusing the existing configuration in /etc/trop\n'
     else
-      printf '  sudo ./trop-install.sh setup\n'
+      printf '  sudo ./trop-install.sh %s\n' "$(setup_action)"
     fi
   else
-    printf '  ./trop-install.sh setup\n'
+    printf '  ./trop-install.sh %s\n' "$(setup_action)"
   fi
   print_deploy_command "$package" "$init_package"
 }
@@ -731,7 +781,7 @@ print_deploy_command() {
 
 offer_install() {
   local architecture="$1" package init_package answer run_setup="true" apply_mode="deploy"
-  package="$DESTINATION/zarf-package-trop-platform-${architecture}-${RELEASE}.tar.zst"
+  package="$DESTINATION/zarf-package-$(platform_name)-${architecture}-${RELEASE}.tar.zst"
   init_package="$(find "$DESTINATION" -maxdepth 1 -type f -name "zarf-init-${architecture}-*.tar.zst" -print -quit)"
   detect_installation_state
 
@@ -765,7 +815,7 @@ offer_install() {
     run_setup="false"
   fi
 
-  local setup_command=(./trop-install.sh setup)
+  local setup_command=(./trop-install.sh "$(setup_action)")
   if [[ -n "$EXISTING_CONFIG" ]]; then
     setup_command+=(--import-config "$EXISTING_CONFIG")
   fi
@@ -834,7 +884,7 @@ finalize_options() {
 }
 
 main() {
-  local architecture command discovery_required="false" guided="false"
+  local architecture command guided="false"
   umask 077
   trap cleanup EXIT
   parse_arguments "$@"
@@ -843,6 +893,12 @@ main() {
     require_command "$command"
   done
   architecture="$(detect_architecture)"
+  TEMP_DIRECTORY="$(mktemp -d)"
+  if [[ "$LIST_RELEASES" != true ]]; then
+    install_zarf "$architecture"
+    write_release_key
+    validate_installed_backend "$architecture"
+  fi
   if [[ -z "$RELEASE" && "$LIST_RELEASES" != "true" ]]; then
     [[ -t 0 ]] || die "--release is required when standard input is not a terminal"
     guided="true"
@@ -850,13 +906,11 @@ main() {
     check_for_bootstrap_update
   fi
   if [[ -z "$RELEASE" || "$RELEASE" == "latest" || "$LIST_RELEASES" == "true" ]]; then
-    discovery_required="true"
-    TEMP_DIRECTORY="$(mktemp -d)"
     ensure_credential
     discover_releases "$architecture"
   fi
   if [[ "$LIST_RELEASES" == "true" ]]; then
-    printf 'Available stable TROP releases for %s:\n' "$architecture"
+    printf 'Available stable TROP %s releases for %s:\n' "$BACKEND" "$architecture"
     print_available_releases 20
     clear_registry_credentials
     return 0
@@ -874,7 +928,7 @@ main() {
     guided_setup "$architecture"
   fi
   finalize_options
-  if [[ -n "$ACTIVE_RELEASE" ]]; then
+  if [[ -n "$ACTIVE_RELEASE" && "$FETCH_ONLY" != true ]]; then
     info "Upgrade: $ACTIVE_RELEASE -> $RELEASE"
   else
     info "Selected immutable release: $RELEASE"
@@ -883,11 +937,6 @@ main() {
     info "Checking permission to use $INSTALL_ROOT"
     run_as_root true || die "sudo authorization is required; run 'sudo -v' first"
   fi
-  if [[ "$discovery_required" != "true" ]]; then
-    TEMP_DIRECTORY="$(mktemp -d)"
-  fi
-  install_zarf "$architecture"
-  write_release_key
   if [[ -e "$DESTINATION" ]]; then
     verify_cached_destination "$architecture"
     clear_registry_credentials
