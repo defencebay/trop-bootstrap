@@ -300,6 +300,9 @@ The release and its signatures will be verified before any installation starts.
 EOF
   if [[ "$BACKEND" == go ]]; then
     printf 'Go setup leaves /etc/hosts, system CA trust and global operator commands disabled.\n'
+    printf 'Go uses one hostname: TOC on 443, native API/Marti on 8443, discovery/enrollment on 8446.\n'
+    printf 'Back up the configuration and Go credentials before updates; keep the installation CA.\n'
+    printf 'Core/bridge service certificates require renewal before 30 days.\n'
   else
     printf 'Python setup asks separately for consent to /etc/hosts, system CA trust and global operator commands.\n'
   fi
