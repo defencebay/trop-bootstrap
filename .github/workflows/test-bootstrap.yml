@@ -11,6 +11,8 @@ permissions:
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.launcher-version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Cosign for ephemeral test keys
@@ -35,5 +37,30 @@ jobs:
           bash -n trop-bootstrap.sh
           bash -n trop-bootstrap-go.sh
           shellcheck trop-bootstrap.sh trop-bootstrap-go.sh
+      - name: Check launcher versions
+        id: launcher-version
+        run: |
+          tag=$(python3 scripts/release-launchers.py)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Test signed release cache and installer gating
         run: python3 scripts/test-bootstrap.py -v
+
+  publish:
+    needs: bootstrap
+    if: github.repository == 'defencebay/trop-bootstrap' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-bootstrap-launchers
+      queue: max
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Publish the tested launcher pair
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.bootstrap.outputs.tag }}
+        run: python3 scripts/release-launchers.py --publish "$RELEASE_TAG"
