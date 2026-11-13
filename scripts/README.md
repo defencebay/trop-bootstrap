@@ -22,6 +22,12 @@ Go file. Only the fixed backend and launcher asset name differ; CI fails if the
 committed Go file drifts from its source. Both files work independently after
 renaming and need no sibling source file or extra code download at runtime.
 
-When preparing a public release, publish `trop-bootstrap.sh` as `trop-bootstrap`
-and `trop-bootstrap-go.sh` as `trop-bootstrap-go` from the same checked revision.
-Publishing these assets does not publish or qualify a private Go application release.
+To release a new version, bump `TROP_BOOTSTRAP_VERSION` in
+`trop-bootstrap.sh`, regenerate the Go launcher and merge the change to
+`main`. After CI passes for that commit, GitHub Actions publishes one
+`vMAJOR.MINOR.PATCH` release containing `trop-bootstrap` and `trop-bootstrap-go`.
+Published versions are skipped. If publication fails partway through, rerun
+the failed job on the original commit to resume its draft.
+
+Publishing the launchers leaves private application releases on their own
+publication and qualification workflow.
