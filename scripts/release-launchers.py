@@ -83,8 +83,35 @@ def publish(repo, sha, tag):
         raise ValueError(f"Conflicting release for {tag}")
 
     ref = tag_ref(repo, tag)
-    if ref and (not drafts or ref["object"]["sha"] != sha):
+    if ref and ref["object"]["sha"] != sha:
         raise ValueError(f"Conflicting existing tag {tag}")
+    if not ref:
+        try:
+            api(
+                f"repos/{repo}/git/refs", "-X", "POST", "-f", f"ref=refs/tags/{tag}",
+                "-f", f"sha={sha}",
+            )
+        except subprocess.CalledProcessError:
+            head = api(f"repos/{repo}/git/ref/heads/main")["object"]["sha"]
+            if head == sha:
+                raise
+
+            def launcher_blobs(commit):
+                tree = api(f"repos/{repo}/git/trees/{commit}")["tree"]
+                return {entry["path"]: entry["sha"] for entry in tree
+                        if entry["path"] in {f"{name}.sh" for name in ASSETS}}
+
+            tested = launcher_blobs(sha)
+            if len(tested) != len(ASSETS) or tested != launcher_blobs(head):
+                raise
+            comparison = api(f"repos/{repo}/compare/{sha}...{head}")
+            if comparison["status"] != "ahead":
+                raise
+            print(f"{tag}: main advanced with identical launchers; the newer run can publish")
+            return
+        ref = tag_ref(repo, tag)
+        if not ref or ref["object"]["sha"] != sha:
+            raise ValueError(f"{tag} does not point to the tested commit")
 
     draft = drafts[0] if drafts else api(
         releases_url, "-X", "POST", "-f", f"tag_name={tag}",
@@ -98,29 +125,30 @@ def publish(repo, sha, tag):
         name: f"sha256:{hashlib.sha256(data).hexdigest()}" for name, data in contents.items()
     }
 
-    def verified_assets():
+    def verified_assets(*, repair=False):
         release = api(release_url)
         if (
             not release["draft"] or release["tag_name"] != tag
             or release["target_commitish"] != sha or release["body"] != notes
         ):
             raise ValueError(f"Release {tag} changed during publication")
+        seen = set()
         verified = set()
         for asset in release["assets"]:
             name = asset["name"]
-            if asset["state"] == "starter" and name in expected:
-                # GitHub can leave an empty starter asset after a failed upload.
-                api(f"{releases_url}/assets/{asset['id']}", "-X", "DELETE")
-            elif (
-                name not in expected or name in verified
-                or asset["state"] != "uploaded" or asset["digest"] != expected[name]
-            ):
+            if name not in expected or name in seen:
                 raise ValueError(f"Unexpected asset in {tag}: {name}")
-            else:
+            seen.add(name)
+            state = asset["state"]
+            if state == "uploaded" and asset["digest"] == expected[name]:
                 verified.add(name)
+            elif repair and state in {"open", "starter", "uploaded"}:
+                api(f"{releases_url}/assets/{asset['id']}", "-X", "DELETE")
+            else:
+                raise ValueError(f"Unexpected asset in {tag}: {name}")
         return verified
 
-    existing = verified_assets()
+    existing = verified_assets(repair=True)
     for name in ASSETS:
         if name not in existing:
             upload(upload_url, name, contents[name])
@@ -128,11 +156,6 @@ def publish(repo, sha, tag):
     if verified_assets() != set(ASSETS):
         raise ValueError(f"Both launcher assets must be verified before publishing {tag}")
 
-    if not ref:
-        api(
-            f"repos/{repo}/git/refs", "-X", "POST", "-f", f"ref=refs/tags/{tag}",
-            "-f", f"sha={sha}",
-        )
     ref = tag_ref(repo, tag)
     if not ref or ref["object"]["sha"] != sha:
         raise ValueError(f"{tag} does not point to the tested commit")
