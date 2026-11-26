@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
-readonly TROP_BOOTSTRAP_VERSION="0.5.0"
+readonly TROP_BOOTSTRAP_VERSION="0.5.1"
 readonly BACKEND="python"
 readonly LAUNCHER_NAME="trop-bootstrap"
 # Bootstrap protocol v3 always uses this pinned client. The signed private
