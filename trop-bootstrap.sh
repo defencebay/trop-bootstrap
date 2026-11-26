@@ -34,6 +34,8 @@ INSTALLATION_STATE=""
 AVAILABLE_RELEASES=""
 LATEST_RELEASE=""
 ACTIVE_RELEASE=""
+CRISIS_HOSTNAME=""
+GO_CRISIS_AVAILABLE="false"
 
 info() {
   printf '[trop-bootstrap] %s\n' "$*"
@@ -61,6 +63,9 @@ cleanup() {
 usage() {
   printf 'Usage: ./%s [--release RELEASE] [options]\n' "$LAUNCHER_NAME"
   printf 'This launcher installs %s. Use the matching launcher for upgrades.\n' "$BACKEND"
+  if [[ "$BACKEND" == go ]]; then
+    printf 'Use --crisis-hostname HOST to enable bundled Crisis on a fresh Go installation.\n'
+  fi
   cat <<'EOF'
 Run without arguments in a terminal to open the guided installer.
 
@@ -299,7 +304,7 @@ The release and its signatures will be verified before any installation starts.
 EOF
   if [[ "$BACKEND" == go ]]; then
     printf 'Go setup leaves /etc/hosts, system CA trust and global operator commands disabled.\n'
-    printf 'Go uses one hostname: TOC on 443, native API/Marti on 8443, discovery/enrollment on 8446.\n'
+    printf 'Go shares one hostname for TOC, native API/Marti and enrollment. Optional Crisis uses a separate HTTPS hostname.\n'
     printf 'Back up the configuration and Go credentials before updates; keep the installation CA.\n'
     printf 'Core/bridge service certificates require renewal before 30 days.\n'
   else
@@ -598,19 +603,30 @@ verify_bootstrap_assets() {
   chmod +x "$directory/trop-install.sh" "${zarf_files[0]}"
 }
 
+signed_package_definition() {
+  local package="$1"
+  "$ZARF_BIN" package inspect definition "$package" \
+    --key "$TEMP_DIRECTORY/trop-release.pub" --verify --no-color || die "signed package verification failed: $package"
+}
+
 signed_package_identity() {
-  local package="$1" definition
-  definition="$("$ZARF_BIN" package inspect definition "$package" \
-    --key "$TEMP_DIRECTORY/trop-release.pub" --verify --no-color)" || die "signed package verification failed: $package"
-  printf '%s\n' "$definition" | "$ZARF_BIN" tools yq -r \
+  signed_package_definition "$1" | "$ZARF_BIN" tools yq -r \
     '[.metadata.name, .metadata.version, .metadata.architecture] | join("|")' -
 }
 
 verify_package_identity() {
-  local package="$1" expected_name="$2" expected_architecture="$3" identity
-  identity="$(signed_package_identity "$package")"
+  local package="$1" expected_name="$2" expected_architecture="$3" definition identity
+  definition="$(signed_package_definition "$package")"
+  identity="$(printf '%s\n' "$definition" | "$ZARF_BIN" tools yq -r \
+    '[.metadata.name, .metadata.version, .metadata.architecture] | join("|")' -)"
   [[ "$identity" == "$expected_name|$RELEASE|$expected_architecture" ]] ||
     die "signed package identity mismatch for $(basename "$package"): expected $expected_name/$RELEASE/$expected_architecture, got $identity"
+  if [[ "$expected_name" == trop-platform-go ]]; then
+    GO_CRISIS_AVAILABLE="$(printf '%s\n' "$definition" | "$ZARF_BIN" tools yq -r \
+      '[.components[] | select(.name == "trop-crisis-management")] | length > 0' -)"
+    [[ -z "$CRISIS_HOSTNAME" || "$GO_CRISIS_AVAILABLE" == true ]] ||
+      die "release $RELEASE does not include the signed Go Crisis component"
+  fi
 }
 
 prepare_staging() {
@@ -761,12 +777,20 @@ print_resume_commands() {
     elif system_config_exists; then
       printf '  # Reusing the existing configuration in /etc/trop\n'
     else
-      printf '  sudo ./trop-install.sh %s\n' "$(setup_action)"
+      print_setup_command "sudo "
     fi
   else
-    printf '  ./trop-install.sh %s\n' "$(setup_action)"
+    print_setup_command ""
   fi
   print_deploy_command "$package" "$init_package"
+}
+
+print_setup_command() {
+  printf '  %s./trop-install.sh %s' "$1" "$(setup_action)"
+  if [[ -n "$CRISIS_HOSTNAME" ]]; then
+    printf ' --crisis-hostname %q' "$CRISIS_HOSTNAME"
+  fi
+  printf '\n'
 }
 
 print_deploy_command() {
@@ -783,7 +807,7 @@ print_deploy_command() {
 }
 
 offer_install() {
-  local architecture="$1" package init_package answer run_setup="true" apply_mode="deploy"
+  local architecture="$1" guided="$2" package init_package answer run_setup="true" apply_mode="deploy"
   package="$DESTINATION/zarf-package-$(platform_name)-${architecture}-${RELEASE}.tar.zst"
   init_package="$(find "$DESTINATION" -maxdepth 1 -type f -name "zarf-init-${architecture}-*.tar.zst" -print -quit)"
   detect_installation_state
@@ -823,6 +847,12 @@ offer_install() {
     setup_command+=(--import-config "$EXISTING_CONFIG")
   fi
   if [[ "$run_setup" == "true" ]]; then
+    if [[ "$GO_CRISIS_AVAILABLE" == true && "$guided" == true && -z "$CRISIS_HOSTNAME" ]]; then
+      read -r -p 'Crisis HTTPS hostname (leave blank to skip Crisis): ' CRISIS_HOSTNAME
+    fi
+    if [[ -n "$CRISIS_HOSTNAME" ]]; then
+      setup_command+=(--crisis-hostname "$CRISIS_HOSTNAME")
+    fi
     if is_system_destination; then
       (cd "$DESTINATION" && run_as_root "${setup_command[@]}") || {
         printf 'Setup failed. Resume with:\n'
@@ -860,6 +890,11 @@ parse_arguments() {
       --release) [[ $# -ge 2 ]] || die "--release requires a value"; RELEASE="$2"; shift 2 ;;
       --list-releases) LIST_RELEASES="true"; shift ;;
       --dest) [[ $# -ge 2 ]] || die "--dest requires a value"; DESTINATION="$2"; shift 2 ;;
+      --crisis-hostname)
+        [[ "$BACKEND" == go ]] || die "--crisis-hostname requires trop-bootstrap-go"
+        [[ $# -ge 2 && "$2" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || die "--crisis-hostname requires a DNS hostname"
+        CRISIS_HOSTNAME="$2"
+        shift 2 ;;
       --config) [[ $# -ge 2 ]] || die "--config requires a value"; EXISTING_CONFIG="$2"; shift 2 ;;
       --token-stdin) TOKEN_STDIN="true"; shift ;;
       --fetch-only) FETCH_ONLY="true"; shift ;;
@@ -879,6 +914,9 @@ finalize_options() {
     DESTINATION="$destination_parent/$(basename "$DESTINATION")"
   fi
   validate_release_transition
+  if [[ -n "$CRISIS_HOSTNAME" ]] && { [[ -n "$ACTIVE_RELEASE" ]] || { is_system_destination && system_config_exists; }; }; then
+    die "--crisis-hostname requires fresh setup. Enable Crisis on an existing Go installation in its retained configuration."
+  fi
   if [[ -n "$EXISTING_CONFIG" ]]; then
     [[ -f "$EXISTING_CONFIG" && -r "$EXISTING_CONFIG" ]] || die "configuration file is not readable: $EXISTING_CONFIG"
     EXISTING_CONFIG="$(cd "$(dirname "$EXISTING_CONFIG")" && pwd)/$(basename "$EXISTING_CONFIG")"
@@ -892,6 +930,8 @@ main() {
   trap cleanup EXIT
   parse_arguments "$@"
   [[ "$LIST_RELEASES" != "true" || -z "$RELEASE" ]] || die "--list-releases cannot be combined with --release"
+  [[ -z "$CRISIS_HOSTNAME" || ( "$LIST_RELEASES" != true && -z "$EXISTING_CONFIG" ) ]] ||
+    die "--crisis-hostname cannot be combined with --list-releases or --config"
   for command in awk base64 cat cmp cp curl dirname find grep install mktemp mv readlink sed sha256sum sort tr; do
     require_command "$command"
   done
@@ -943,7 +983,7 @@ main() {
   if [[ -e "$DESTINATION" ]]; then
     verify_cached_destination "$architecture"
     clear_registry_credentials
-    offer_install "$architecture"
+    offer_install "$architecture" "$guided"
     return
   fi
   prepare_staging
@@ -955,7 +995,7 @@ main() {
   publish_destination
   rm -rf -- "$TEMP_DIRECTORY"
   TEMP_DIRECTORY=""
-  offer_install "$architecture"
+  offer_install "$architecture" "$guided"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
