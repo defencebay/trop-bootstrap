@@ -83,10 +83,20 @@ release listing, use the corresponding file:
 ./trop-bootstrap --list-releases
 ```
 
-Go includes native TOC, TROP-ID, TAK bridge, PostgreSQL, XMPP and media; AI and
-Crisis are excluded. It needs a fresh host/configuration. Its launcher invokes
-`setup-go`, then deploys the signed `trop-platform-go` package. It never substitutes
-a Python release if no complete Go release exists for the architecture.
+Go includes native TOC, TROP-ID, TAK bridge, PostgreSQL, XMPP and media.
+The guided setup offers Crisis when the signed Go package bundles it. Enter a
+dedicated DNS hostname to enable it on a fresh Go host, or leave the prompt blank.
+For a specific signed release, use:
+
+```bash
+./trop-bootstrap-go --release rNN-YYYYMMDD --crisis-hostname crisis.example.com
+```
+
+Resolve the Crisis hostname to the Standalone LAN address, give browsers trust
+in the installation CA, and open Crisis from TOC as an administrator. The hostname
+must differ from the Go TOC/API and XMPP names. To enable Crisis during an upgrade,
+use the retained Go configuration as described in the
+[backend guide](https://github.com/defencebay/trop-infra/blob/master/docs/standalone-backends.md).
 
 Go setup leaves hosts-file changes, system CA trust and global operator tools
 disabled; qualify these integrations separately before using the Python-oriented

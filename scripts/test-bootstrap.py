@@ -89,7 +89,7 @@ class BootstrapCacheTests(unittest.TestCase):
             self.bootstraps[backend] = script
         self.make_cache()
 
-    def make_package(self, name, version, architecture, documentation=None, *, signer=None):
+    def make_package(self, name, version, architecture, documentation=None, *, signer=None, crisis=False):
         variant = "untrusted" if signer else "trusted"
         source = self.work / f"source-{name}-{version}-{architecture}-{variant}"
         source.mkdir()
@@ -103,6 +103,8 @@ class BootstrapCacheTests(unittest.TestCase):
             "  - name: fixture",
             "    required: true",
         ]
+        if crisis:
+            lines.extend(["  - name: trop-crisis-management", "    required: true"])
         if documentation:
             lines.append("documentation:")
             for filename in documentation:
@@ -128,7 +130,8 @@ class BootstrapCacheTests(unittest.TestCase):
             "#!/usr/bin/env bash\n"
             "set -eu\n"
             "case \"${1:-}\" in\n"
-            "  setup|setup-go) ;;\n"
+            "  setup-go) printf '%s\\n' \"$*\" >> \"$TEST_INSTALLER_LOG\"; exit 0 ;;\n"
+            "  setup) ;;\n"
             "  installation-state) printf '%s\\n' \"${TEST_INSTALLATION_STATE:-fresh}\"; exit 0 ;;\n"
             "  deploy|update) [ -f \"${2:-}\" ] || exit 21 ;;\n"
             "  *) exit 22 ;;\n"
@@ -340,9 +343,9 @@ class BootstrapCacheTests(unittest.TestCase):
         self.assertIn("Resume later", output)
         self.assertFalse(self.installer_log.exists(), output)
 
-    def enable_go_cache(self):
+    def enable_go_cache(self, *, crisis=False):
         self.backend = "go"
-        package = self.make_package("trop-platform-go", RELEASE, ARCH)
+        package = self.make_package("trop-platform-go", RELEASE, ARCH, crisis=crisis)
         shutil.copy2(package, self.cache / package.name)
 
     def test_go_cache_uses_setup_go_and_matching_signed_package(self):
@@ -352,6 +355,26 @@ class BootstrapCacheTests(unittest.TestCase):
         code, output = self.run_main_tty(auto_install=True)
         self.assertEqual(code, 0, output)
         self.assertEqual(self.installer_log.read_text().splitlines(), ["setup-go", "deploy"])
+
+    def test_fresh_setup_passes_crisis_hostname_from_signed_release(self):
+        self.enable_go_cache(crisis=True)
+        code, output = self.run_main_tty(
+            code=self.main_code(auto_install=True) + " --crisis-hostname crisis.local.test"
+        )
+        self.assertEqual(code, 0, output)
+        self.assertEqual(
+            self.installer_log.read_text().splitlines(),
+            ["setup-go --crisis-hostname crisis.local.test", "deploy"],
+        )
+
+    def test_crisis_not_offered_if_missing_from_signed_release(self):
+        self.enable_go_cache()
+        code, output = self.run_main_tty(
+            code=self.main_code(auto_install=True) + " --crisis-hostname crisis.local.test"
+        )
+        self.assertNotEqual(code, 0, output)
+        self.assertIn("does not include the signed Go Crisis component", output)
+        self.assertFalse(self.installer_log.exists(), output)
 
     def test_renamed_python_package_is_rejected_for_go(self):
         self.enable_go_cache()
